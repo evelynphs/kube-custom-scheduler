@@ -7,7 +7,7 @@ import (
 
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/runtime"
-    "k8s.io/kube-scheduler/framework"
+    framework "k8s.io/kube-scheduler/framework" 
 )
 
 const (
