@@ -7,8 +7,9 @@ FROM golang:1.25-bookworm AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
+RUN go mod tidy
 RUN go mod download
-
+# i need to do this
 COPY . .
 
 ARG TARGETOS
