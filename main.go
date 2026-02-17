@@ -1,22 +1,18 @@
-// main.go
+// punya rossgray
+
 package main
 
 import (
-    "os"
-
-    "k8s.io/component-base/cli"
-    "k8s.io/kubernetes/cmd/kube-scheduler/app"
-
-    // Import your custom plugins
-    "github.com/evelynphs/kube-custom-scheduler/plugins"
+	"github.com/evelynphs/kube-custom-scheduler/plugin"
+	"k8s.io/klog"
+	scheduler "k8s.io/kubernetes/cmd/kube-scheduler/app"
 )
 
 func main() {
-    // Register custom plugins with the scheduler framework
-    command := app.NewSchedulerCommand(
-        app.WithPlugin(plugins.GPUAwareName, plugins.NewGPUAwarePlugin),
-    )
-
-    code := cli.Run(command)
-    os.Exit(code)
+	command := scheduler.NewSchedulerCommand(
+		scheduler.WithPlugin(plugin.Name, plugin.New),
+	)
+	if err := command.Execute(); err != nil {
+		klog.Fatal(err)
+	}
 }

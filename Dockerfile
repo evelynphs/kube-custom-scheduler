@@ -1,30 +1,22 @@
-# syntax=docker/dockerfile:1
+FROM golang:1.21-alpine3.18 as builder
 
-############################
-# 1) Build stage
-############################
-FROM golang:1.22-bookworm AS builder
-WORKDIR /src
+WORKDIR /build
 
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod .
+COPY go.sum .
+
+RUN --mount=type=cache,target=/go/pkg \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 COPY . .
 
-ARG TARGETOS
-ARG TARGETARCH
+RUN --mount=type=cache,target=/go/pkg \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -o /bin/kube-custom-scheduler
 
-RUN CGO_ENABLED=0 \
-    GOOS=${TARGETOS:-linux} \
-    GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -ldflags="-s -w" -o /out/kube-scheduler ./main.go
+FROM alpine:3.18
 
+COPY --from=builder /bin/kube-custom-scheduler /bin/kube-custom-scheduler
 
-############################
-# 2) Runtime stage
-############################
-FROM registry.k8s.io/kube-scheduler:v1.29.0
-
-COPY --from=builder /out/kube-scheduler /usr/local/bin/kube-scheduler
-
-ENTRYPOINT ["/usr/local/bin/kube-scheduler"]
+CMD ["/bin/kube-custom-scheduler"]
