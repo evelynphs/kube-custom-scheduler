@@ -1,8 +1,8 @@
 name: Build and Push Scheduler Image
 
 on:
-  pull_request:
-    branches: [ "main" ]
+  push:
+    branches: [ "ganti" ]
 
 env:
   IMAGE_NAME: node-group-scheduler
