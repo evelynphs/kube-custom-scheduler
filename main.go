@@ -3,7 +3,7 @@
 package main
 
 import (
-	"github.com/evelynphs/kube-custom-scheduler/plugin"
+	"github.com/evelynphs/kube-custom-scheduler/plugins"
 	"k8s.io/klog"
 	scheduler "k8s.io/kubernetes/cmd/kube-scheduler/app"
 )
