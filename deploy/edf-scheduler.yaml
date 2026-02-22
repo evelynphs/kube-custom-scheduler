@@ -54,17 +54,17 @@ data:
     apiVersion: kubescheduler.config.k8s.io/v1
     kind: KubeSchedulerConfiguration
     profiles:
-      - schedulerName: deadline-aware-scheduler
-        plugins:
-         queueSort:
-            disabled:
-            - name: PrioritySort
-            enabled:
-            - name: EDFQueueSort
-        pluginConfig:
+    - schedulerName: deadline-aware-scheduler
+      plugins:
+        queueSort:
+          disabled:
+          - name: PrioritySort
+          enabled:
           - name: EDFQueueSort
-            args:
-              deadlineAnnotation: "scheduling/deadline"
+      pluginConfig:
+      - name: EDFQueueSort
+        args:
+          deadlineAnnotation: "scheduling/deadline"
     leaderElection:
       leaderElect: false
 ---
@@ -114,11 +114,11 @@ spec:
         securityContext:
           privileged: false
         volumeMounts:
-          - name: config-volume
-            mountPath: /etc/kubernetes/kube-custom-scheduler
+        - name: config-volume
+          mountPath: /etc/kubernetes/kube-custom-scheduler
       hostNetwork: false
       hostPID: false
       volumes:
-        - name: config-volume
-          configMap:
-            name: deadline-aware-scheduler-config
+      - name: config-volume
+        configMap:
+          name: deadline-aware-scheduler-config
