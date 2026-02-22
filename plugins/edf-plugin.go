@@ -74,8 +74,9 @@ func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (fram
 }
 
 // Less is the function used by the activeQ heap algorithm to sort pods.
-// 1) Sort Pods based on earliest deadline first (EDF).
-// 2) Otherwise, follow the strategy of the in-tree QueueSort Plugin (PrioritySort Plugin)
+// 1) Pods with a valid deadline are always prioritized over pods without a deadline.
+// 2) If both pods have deadlines, they are ordered by Earliest Deadline First (EDF).
+// 3) If neither pod has a valid deadline, fallback to the in-tree QueueSort Plugin (PrioritySort).
 func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
 	pod1 := pInfo1.GetPodInfo().GetPod()
 	pod2 := pInfo2.GetPodInfo().GetPod()
@@ -85,9 +86,19 @@ func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
 	d1, ok1 := es.getDeadline(pod1.Annotations)
 	d2, ok2 := es.getDeadline(pod2.Annotations)
 
-	// If deadline missing/invalid, fallback to default behavior
-	if !ok1 || !ok2 {
-		logger.V(4).Info("Deadline missing/invalid, fallback to PrioritySort",
+	// Rule 1: Pods WITH a valid deadline come before pods WITHOUT a valid deadline.
+	if ok1 != ok2 {
+		// ok1=true means pod1 has deadline => pod1 should be ordered first (Less=true)
+		logger.V(4).Info("One pod has deadline and the other does not; prioritizing deadline pod",
+			"pod1", pod1.Name, "pod1HasDeadline", ok1,
+			"pod2", pod2.Name, "pod2HasDeadline", ok2,
+		)
+		return ok1
+	}
+
+	// Rule 2: If neither has deadline, fallback to default kube sort.
+	if !ok1 && !ok2 {
+		logger.V(4).Info("Both pods missing/invalid deadline, fallback to PrioritySort",
 			"pod1", pod1.Name,
 			"pod2", pod2.Name,
 		)
@@ -95,7 +106,7 @@ func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
 		return s.Less(pInfo1, pInfo2)
 	}
 
-	// Earliest deadline first
+	// Rule 3: Both have deadlines -> EDF (earliest deadline first).
 	if d1.Before(d2) {
 		return true
 	}
