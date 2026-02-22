@@ -1,0 +1,75 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-2
+  annotations:
+    scheduling/deadline: "2026-02-23T17:21:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:21:00Z"
+    spec:
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 2 with deadline 17:21"
+          echo "Processing..."
+          sleep 30
+          echo "Task completed!"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-1
+  annotations:
+    scheduling/deadline: "2026-02-23T17:20:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:20:00Z"
+    spec:
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 1 with deadline 17:20"
+          echo "Processing data..."
+          sleep 45
+          echo "Task completed!"
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-3
+  annotations:
+    scheduling/deadline: "2026-02-23T17:22:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:22:00Z"
+    spec:
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 3 with deadline 17:22"
+          echo "Processing data..."
+          sleep 45
+          echo "Task completed!"
