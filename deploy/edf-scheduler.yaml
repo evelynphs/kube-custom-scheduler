@@ -51,12 +51,14 @@ metadata:
   namespace: kube-system
 data:
   deadline-aware-scheduler-config.yaml: |
-    apiVersion: kubescheduler.config.k8s.io/v1beta2
+    apiVersion: kubescheduler.config.k8s.io/v1
     kind: KubeSchedulerConfiguration
     profiles:
       - schedulerName: deadline-aware-scheduler
         plugins:
-          filter:
+         queueSort:
+            disabled:
+            - name: PrioritySort
             enabled:
             - name: EDFQueueSort
         pluginConfig:
