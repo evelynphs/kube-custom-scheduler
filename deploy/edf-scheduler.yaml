@@ -65,6 +65,8 @@ data:
           - name: EDFQueueSort
             args:
               deadlineAnnotation: "scheduling/deadline"
+    leaderElection:
+      leaderElect: false
 ---
 apiVersion: apps/v1
 kind: Deployment
