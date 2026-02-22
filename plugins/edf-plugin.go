@@ -6,7 +6,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
-	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
@@ -77,7 +76,7 @@ func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (fram
 // 1) Pods with a valid deadline are always prioritized over pods without a deadline.
 // 2) If both pods have deadlines, they are ordered by Earliest Deadline First (EDF).
 // 3) If neither pod has a valid deadline, fallback to the in-tree QueueSort Plugin (PrioritySort).
-func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
+func (es *EDFQueueSort) Less(pInfo1, pInfo2 framework.QueuedPodInfo) bool {
 	pod1 := pInfo1.GetPodInfo().GetPod()
 	pod2 := pInfo2.GetPodInfo().GetPod()
 
