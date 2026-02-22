@@ -100,7 +100,7 @@ spec:
             port: 10259
             scheme: HTTPS
           initialDelaySeconds: 15
-        name: kube-custom-scheduler
+        name: deadline-aware-scheduler
         readinessProbe:
           httpGet:
             path: /healthz
