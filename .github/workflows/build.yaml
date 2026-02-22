@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
 
 env:
-  IMAGE_NAME: node-group-scheduler
+  IMAGE_NAME: deadline-aware-scheduler
 
 jobs:
   build:
@@ -29,4 +29,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: evelynphs/node-group-scheduler:latest
+        tags: evelynphs/deadline-aware-scheduler:latest

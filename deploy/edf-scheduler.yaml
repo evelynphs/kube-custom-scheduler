@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: custom-scheduler
+  name: deadline-aware-scheduler
   namespace: kube-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: custom-scheduler-as-kube-scheduler
+  name: deadline-aware-scheduler-as-kube-scheduler
 subjects:
 - kind: ServiceAccount
-  name: custom-scheduler
+  name: deadline-aware-scheduler
   namespace: kube-system
 roleRef:
   kind: ClusterRole
@@ -20,10 +20,10 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: custom-scheduler-as-volume-scheduler
+  name: deadline-aware-scheduler-as-volume-scheduler
 subjects:
 - kind: ServiceAccount
-  name: custom-scheduler
+  name: deadline-aware-scheduler
   namespace: kube-system
 roleRef:
   kind: ClusterRole
@@ -33,7 +33,7 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: custom-scheduler-extension-apiserver-authentication-reader
+  name: deadline-aware-scheduler-extension-apiserver-authentication-reader
   namespace: kube-system
 roleRef:
   kind: Role
@@ -41,24 +41,24 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 subjects:
 - kind: ServiceAccount
-  name: custom-scheduler
+  name: deadline-aware-scheduler
   namespace: kube-system
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: custom-scheduler-config
+  name: deadline-aware-scheduler-config
   namespace: kube-system
 data:
-  custom-scheduler-config.yaml: |
+  deadline-aware-scheduler-config.yaml: |
     apiVersion: kubescheduler.config.k8s.io/v1beta2
     kind: KubeSchedulerConfiguration
     profiles:
-      - schedulerName: custom-scheduler
+      - schedulerName: deadline-aware-scheduler
         plugins:
           filter:
             enabled:
-            - name: MyCustomPlugin
+            - name: EDFQueueSort
     leaderElection:
       leaderElect: false
 ---
@@ -68,7 +68,7 @@ metadata:
   labels:
     component: scheduler
     tier: control-plane
-  name: custom-scheduler
+  name: deadline-aware-scheduler
   namespace: kube-system
 spec:
   selector:
@@ -83,12 +83,12 @@ spec:
         tier: control-plane
         version: second
     spec:
-      serviceAccountName: custom-scheduler
+      serviceAccountName: deadline-aware-scheduler
       containers:
       - command:
         - /bin/kube-custom-scheduler
-        - --config=/etc/kubernetes/kube-custom-scheduler/custom-scheduler-config.yaml
-        image: evelynphs/node-group-scheduler:latest
+        - --config=/etc/kubernetes/kube-custom-scheduler/deadline-aware-scheduler-config.yaml
+        image: evelynphs/deadline-aware-scheduler:latest
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
@@ -96,7 +96,7 @@ spec:
             port: 10259
             scheme: HTTPS
           initialDelaySeconds: 15
-        name: kube-second-scheduler
+        name: kube-custom-scheduler
         readinessProbe:
           httpGet:
             path: /healthz
@@ -115,4 +115,4 @@ spec:
       volumes:
         - name: config-volume
           configMap:
-            name: custom-scheduler-config
+            name: deadline-aware-scheduler-config
