@@ -62,7 +62,7 @@ func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (fram
 
 	key := args.DeadlineAnnotation
 	if key == "" {
-		key = "scheduling.ui.ac.id/deadline"
+		key = "scheduling/deadline"
 	}
 
 	pl := &EDFQueueSort{
