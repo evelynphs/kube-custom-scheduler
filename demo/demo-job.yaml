@@ -15,6 +15,10 @@ spec:
       containers:
       - name: compute-task
         image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -40,6 +44,10 @@ spec:
       containers:
       - name: compute-task
         image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -47,7 +55,6 @@ spec:
           echo "Processing data..."
           sleep 45
           echo "Task completed!"
-
 ---
 apiVersion: batch/v1
 kind: Job
@@ -66,6 +73,10 @@ spec:
       containers:
       - name: compute-task
         image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
         command: ["/bin/sh", "-c"]
         args:
         - |
