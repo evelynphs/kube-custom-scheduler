@@ -9,7 +9,7 @@ DEADLINE_ANNOTATION_KEY="${DEADLINE_ANNOTATION_KEY:-scheduling/deadline}"
 
 # Deadline settings (UTC, RFC3339)
 # Start from "now + START_OFFSET_MIN minutes", then increment by STEP_MIN each job.
-START_OFFSET_MIN="${START_OFFSET_MIN:-5}"
+START_OFFSET_MIN="${START_OFFSET_MIN:-30}"
 STEP_MIN="${STEP_MIN:-1}"
 
 # Job runtime (seconds).
@@ -33,7 +33,7 @@ echo "Deadlines: start in +${START_OFFSET_MIN}min, step +${STEP_MIN}min, annotat
 echo
 
 for i in $(seq 1 "$N_JOBS"); do
-  minutes_from_now=$(( START_OFFSET_MIN + (i-1)*STEP_MIN ))
+  minutes_from_now=$(( START_OFFSET_MIN - (i-1)*STEP_MIN ))
   dl="$(deadline_rfc3339_utc "$minutes_from_now")"
   job_name="job-deadline-${i}"
 
