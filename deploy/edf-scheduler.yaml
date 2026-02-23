@@ -58,7 +58,7 @@ data:
       plugins:
         queueSort:
           disabled:
-          - name: PrioritySort
+          - name: "*"
           enabled:
           - name: EDFQueueSort
       pluginConfig:
