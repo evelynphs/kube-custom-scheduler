@@ -45,7 +45,7 @@ echo
 
 for i in $(seq 1 "$N_JOBS"); do
   # Make deadlines increase for later jobs (job 1 = earliest)
-  minutes_from_now=$(( START_OFFSET_MIN + (i - 1) * STEP_MIN ))
+  minutes_from_now=$(( START_OFFSET_MIN - (i - 1) * STEP_MIN ))
   dl="$(deadline_rfc3339_utc "$minutes_from_now")"
   job_name="job-deadline-${i}"
 
