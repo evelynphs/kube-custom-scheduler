@@ -61,7 +61,7 @@ func getArgs(obj runtime.Object) (*EDFQueueSortArgs, error) {
 // New : create an instance of an EDFQueueSort plugin
 func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 	logger := klog.FromContext(ctx).WithValues("plugin", Name)
-	logger.V(4).Info("Creating new instance of the EDFQueueSort plugin")
+	logger.Info("Creating new instance of the EDFQueueSort plugin")
 
 	args, err := getArgs(obj)
 	if err != nil {
@@ -88,6 +88,8 @@ func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (fram
 }
 
 func (es *EDFQueueSort) PreEnqueue(ctx context.Context, pod *v1.Pod) *fwk.Status {
+	es.logger.Info("PreEnqueue called", "pod", pod.Name, "namespace", pod.Namespace)
+
 	if ann := pod.Annotations; ann != nil {
         if _, exists := ann[es.deadlineTimestampKey]; exists {
             return fwk.NewStatus(fwk.Success)
@@ -96,6 +98,8 @@ func (es *EDFQueueSort) PreEnqueue(ctx context.Context, pod *v1.Pod) *fwk.Status
 	
     deadlineDuration := es.parseDeadlineDuration(pod)
     deadline := time.Now().Add(deadlineDuration)
+
+	es.logger.Info("Deadlilne duration calculated: ", deadlineDuration.String(), " for pod ", pod.Name)
 
     // write deadline annotation back to the pod via API server
     podCopy := pod.DeepCopy()
@@ -169,6 +173,7 @@ func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
 
 func (es *EDFQueueSort) parseDeadlineDuration(pod *v1.Pod) time.Duration {
     annotations := pod.Annotations
+
     if annotations == nil {
         return DefaultDurationSeconds * time.Second
     }
@@ -177,6 +182,8 @@ func (es *EDFQueueSort) parseDeadlineDuration(pod *v1.Pod) time.Duration {
     if !exists {
         return DefaultDurationSeconds * time.Second
     }
+
+	es.logger.Info("parseDeadlineDuration called, deadline duration: ", raw, " for pod ", pod.Name)
 
     // handle "600s" format
     raw = strings.TrimSuffix(raw, "s")
