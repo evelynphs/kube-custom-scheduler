@@ -1,0 +1,208 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-10-default
+  annotations:
+    scheduling/deadline: "2026-02-23T17:20:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:20:00Z"
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 10 (default scheduler)"
+          sleep 45
+          echo "Task completed!"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-9-default
+  annotations:
+    scheduling/deadline: "2026-02-23T17:21:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:21:00Z"
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["/bin/sh", "-c"]
+        args: ["sleep 45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-8-default
+  annotations:
+    scheduling/deadline: "2026-02-23T17:22:00Z"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline: "2026-02-23T17:22:00Z"
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-7-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-6-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-5-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-4-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-3-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-2-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-1-default
+spec:
+  template:
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["sleep"]
+        args: ["45"]
