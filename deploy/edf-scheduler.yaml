@@ -51,18 +51,22 @@ metadata:
   namespace: kube-system
 data:
   deadline-aware-scheduler-config.yaml: |
-    apiVersion: kubescheduler.config.k8s.io/v1beta2
+    apiVersion: kubescheduler.config.k8s.io/v1
     kind: KubeSchedulerConfiguration
     profiles:
-      - schedulerName: deadline-aware-scheduler
-        plugins:
-          filter:
-            enabled:
-            - name: EDFQueueSort
-        pluginConfig:
+    - schedulerName: deadline-aware-scheduler
+      plugins:
+        queueSort:
+          disabled:
+          - name: "*"
+          enabled:
           - name: EDFQueueSort
-            args:
-              deadlineAnnotation: "scheduling/deadline"
+      pluginConfig:
+      - name: EDFQueueSort
+        args:
+          deadlineAnnotation: "scheduling/deadline"
+    leaderElection:
+      leaderElect: false
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -98,7 +102,7 @@ spec:
             port: 10259
             scheme: HTTPS
           initialDelaySeconds: 15
-        name: kube-custom-scheduler
+        name: deadline-aware-scheduler
         readinessProbe:
           httpGet:
             path: /healthz
@@ -110,11 +114,11 @@ spec:
         securityContext:
           privileged: false
         volumeMounts:
-          - name: config-volume
-            mountPath: /etc/kubernetes/kube-custom-scheduler
+        - name: config-volume
+          mountPath: /etc/kubernetes/kube-custom-scheduler
       hostNetwork: false
       hostPID: false
       volumes:
-        - name: config-volume
-          configMap:
-            name: deadline-aware-scheduler-config
+      - name: config-volume
+        configMap:
+          name: deadline-aware-scheduler-config
