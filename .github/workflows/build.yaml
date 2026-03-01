@@ -1,8 +1,8 @@
 name: Build and Push Scheduler Image
 
 on:
-  push:
-    branches: [ "preenqueue-test" ]
+  # push:
+  #   branches: [ "preenqueue-test" ]
 
 env:
   IMAGE_NAME: deadline-aware-scheduler
