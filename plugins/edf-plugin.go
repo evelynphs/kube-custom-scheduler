@@ -3,7 +3,12 @@ package plugin
 import (
 	"context"
 	"time"
+	"fmt"
+    "strconv"
+    "strings"
 
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
@@ -15,24 +20,27 @@ import (
 const (
 	// Name : name of plugin used in the plugin registry and configurations.
 	Name = "EDFQueueSort"
+
+	DefaultDurationSeconds = 600
 )
 
 // EDFQueueSortArgs : configuration args for EDFQueueSort plugin.
 // NOTE: This is decoded from pluginConfig.args (YAML/JSON) at runtime.
 type EDFQueueSortArgs struct {
-	// DeadlineAnnotation defines annotation key used to read deadline (RFC3339).
-	// Example: "scheduling.ui.ac.id/deadline"
-	DeadlineAnnotation string `json:"deadlineAnnotation,omitempty"`
+	DeadlineDurationAnnotation string `json:"deadlineAnnotation,omitempty"`
+	DeadlineTimestampAnnotation string `json:"deadlineTimestampAnnotation,omitempty"`
 }
 
 // EDFQueueSort : Sort pods based on earliest deadline first (EDF)
 type EDFQueueSort struct {
 	logger      klog.Logger
 	handle      framework.Handle
-	deadlineKey string
+	deadlineDurationKey string
+	deadlineTimestampKey string
 }
 
 var _ framework.QueueSortPlugin = &EDFQueueSort{}
+var _ framework.PreEnqueuePlugin = &EDFQueueSort{}
 
 // Name : returns the name of the plugin.
 func (es *EDFQueueSort) Name() string {
@@ -60,17 +68,55 @@ func New(ctx context.Context, obj runtime.Object, handle framework.Handle) (fram
 		return nil, err
 	}
 
-	key := args.DeadlineAnnotation
+	key := args.DeadlineDurationAnnotation
 	if key == "" {
-		key = "scheduling/deadline"
+		key = "scheduling/deadline-duration"
+	}
+
+	key2 := args.DeadlineTimestampAnnotation
+	if key2 == "" {
+		key2 = "scheduling/deadline-timestamp"
 	}
 
 	pl := &EDFQueueSort{
 		logger:      logger,
 		handle:      handle,
-		deadlineKey: key,
+		deadlineDurationKey: key,
+		deadlineTimestampKey: key2,
 	}
 	return pl, nil
+}
+
+func (es *EDFQueueSort) PreEnqueue(ctx context.Context, pod *v1.Pod) *fwk.Status {
+	if ann := pod.Annotations; ann != nil {
+        if _, exists := ann[es.deadlineTimestampKey]; exists {
+            return fwk.NewStatus(fwk.Success)
+        }
+    }
+	
+    deadlineDuration := es.parseDeadlineDuration(pod)
+    deadline := time.Now().Add(deadlineDuration)
+
+    // write deadline annotation back to the pod via API server
+    podCopy := pod.DeepCopy()
+    if podCopy.Annotations == nil {
+        podCopy.Annotations = map[string]string{}
+    }
+    podCopy.Annotations[es.deadlineTimestampKey] = deadline.UTC().Format(time.RFC3339)
+
+    _, err := es.handle.ClientSet().CoreV1().Pods(pod.Namespace).Update(
+        ctx,
+        podCopy,
+        metav1.UpdateOptions{},
+    )
+    if err != nil {
+        // don't block scheduling if annotation fails — just log and continue
+        // the QueueSort will fall back to creation time
+        return fwk.NewStatus(fwk.Success,
+            fmt.Sprintf("failed to annotate deadline: %v", err))
+    }
+
+    return fwk.NewStatus(fwk.Success)
 }
 
 // Less is the function used by the activeQ heap algorithm to sort pods.
@@ -119,13 +165,36 @@ func (es *EDFQueueSort) Less(pInfo1, pInfo2 fwk.QueuedPodInfo) bool {
 	return s.Less(pInfo1, pInfo2)
 }
 
+// Helpers====================================================================================
+
+func (es *EDFQueueSort) parseDeadlineDuration(pod *v1.Pod) time.Duration {
+    annotations := pod.Annotations
+    if annotations == nil {
+        return DefaultDurationSeconds * time.Second
+    }
+
+    raw, exists := annotations[es.deadlineDurationKey]
+    if !exists {
+        return DefaultDurationSeconds * time.Second
+    }
+
+    // handle "600s" format
+    raw = strings.TrimSuffix(raw, "s")
+    secs, err := strconv.ParseFloat(raw, 64)
+    if err != nil || secs <= 0 {
+        return DefaultDurationSeconds * time.Second
+    }
+
+    return time.Duration(secs) * time.Second
+}
+
 // getDeadline : parse deadline annotation (RFC3339)
 func (es *EDFQueueSort) getDeadline(annotations map[string]string) (time.Time, bool) {
 	if annotations == nil {
 		return time.Time{}, false
 	}
 
-	raw := annotations[es.deadlineKey]
+	raw := annotations[es.deadlineTimestampKey]
 	if raw == "" {
 		return time.Time{}, false
 	}
@@ -133,7 +202,7 @@ func (es *EDFQueueSort) getDeadline(annotations map[string]string) (time.Time, b
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		es.logger.V(4).Info("Invalid deadline format",
-			"key", es.deadlineKey,
+			"key", es.deadlineTimestampKey,
 			"value", raw,
 			"error", err,
 		)
