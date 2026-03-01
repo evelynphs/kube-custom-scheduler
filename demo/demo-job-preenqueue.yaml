@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-10
+  annotations:
+    scheduling/deadline-duration: "120s"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline-duration: "120s"
+    spec:
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 10 with deadline 17:20"
+          echo "Processing..."
+          sleep 45
+          echo "Task completed!"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-deadline-9
+  annotations:
+    scheduling/deadline-duration: "300s"
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline-duration: "300s"
+    spec:
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "60"
+            memory: "128Mi"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 9 with deadline 17:21"
+          echo "Processing..."
+          sleep 45
+          echo "Task completed!"
