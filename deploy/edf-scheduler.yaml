@@ -43,6 +43,32 @@ subjects:
 - kind: ServiceAccount
   name: deadline-aware-scheduler
   namespace: kube-system
+
+# Allow scheduler to update pod annotations ===============
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deadline-aware-scheduler-pod-annotator
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deadline-aware-scheduler-pod-annotator-binding
+subjects:
+- kind: ServiceAccount
+  name: deadline-aware-scheduler
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: deadline-aware-scheduler-pod-annotator
+  apiGroup: rbac.authorization.k8s.io
+# ==========================================================
+
 ---
 apiVersion: v1
 kind: ConfigMap
