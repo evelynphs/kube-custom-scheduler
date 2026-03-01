@@ -56,6 +56,11 @@ data:
     profiles:
     - schedulerName: deadline-aware-scheduler
       plugins:
+        preEnqueue:
+          disabled:
+          - name: "*"
+          enabled:
+          - name: EDFQueueSort
         queueSort:
           disabled:
           - name: "*"
@@ -64,7 +69,7 @@ data:
       pluginConfig:
       - name: EDFQueueSort
         args:
-          deadlineAnnotation: "scheduling/deadline"
+          deadlineAnnotation: "scheduling/deadline-duration"
     leaderElection:
       leaderElect: false
 ---
@@ -94,7 +99,7 @@ spec:
       - command:
         - /bin/kube-custom-scheduler
         - --config=/etc/kubernetes/kube-custom-scheduler/deadline-aware-scheduler-config.yaml
-        image: evelynphs/deadline-aware-scheduler:latest
+        image: evelynphs/deadline-aware-scheduler:v2
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
