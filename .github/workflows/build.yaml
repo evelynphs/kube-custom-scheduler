@@ -1,7 +1,9 @@
 name: Build and Push Scheduler Image
 
 on:
-  pull_request:
+  # pull_request:
+  #   branches: [ "main" ]
+  push:
     branches: [ "test-workload" ]
 
 env:
