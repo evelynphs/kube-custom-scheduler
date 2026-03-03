@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-matrix-mult-1
+spec:
+  template:
+    metadata:
+      labels:
+        app: matrix-mult
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: matrix-mult
+        image: kube-custom-scheduler:latest
+        command: ["python3", "/app/matrix_mult.py", "50", "1", "2"]
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-matrix-mult-2
+spec:
+  template:
+    metadata:
+      labels:
+        app: matrix-mult
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: matrix-mult
+        image: kube-custom-scheduler:latest
+        command: ["python3", "/app/matrix_mult.py", "100", "3", "4"]
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "128Mi"
