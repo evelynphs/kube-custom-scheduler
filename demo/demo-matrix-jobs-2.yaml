@@ -12,5 +12,5 @@ spec:
       restartPolicy: Never
       containers:
       - name: matrix-mult
-        image: evelynphs/kube-custom-scheduler:workload-test
+        image: evelynphs/deadline-aware-scheduler:workload-test
         command: ["python3", "/app/matrix_mult.py", "100", "3", "4"]
