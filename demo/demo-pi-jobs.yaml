@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-pi-estimation-1
+spec:
+  template:
+    metadata:
+      labels:
+        app: pi-estimation
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: pi-estimation
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["python3", "/app/pi_estimation.py", "20000", "123"]
