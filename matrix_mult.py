@@ -10,9 +10,6 @@ def schoolbook(array_first, array_second):
                 result[i, j] += array_first[i, k] * array_second[k, j]
     return result
 
-def save_output(output):
-    np.savetxt("output.txt", output, delimiter=' ', fmt='%g')
-
 if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Usage: python matrix_mult.py <n> <val_a> <val_b>")
@@ -27,4 +24,3 @@ if __name__ == "__main__":
     array_second = np.full((n, n), val_b)
 
     output = schoolbook(array_first, array_second)
-    save_output(output)
