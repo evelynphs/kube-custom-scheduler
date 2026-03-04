@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: job-matrix-mult-1
+  name: job-matrix-mult-2
 spec:
   template:
     metadata:
@@ -13,4 +13,4 @@ spec:
       containers:
       - name: matrix-mult
         image: evelynphs/deadline-aware-scheduler:workload-test
-        command: ["python3", "/app/matrix_mult.py", "500", "7", "9"]
+        command: ["python3", "/app/matrix_mult.py", "10000", "42", "87"]
