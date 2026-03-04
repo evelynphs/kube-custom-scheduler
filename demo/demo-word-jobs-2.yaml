@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-word-count-2
+spec:
+  template:
+    metadata:
+      labels:
+        app: word-count
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: word-count
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["python3", "/app/word_count.py", "This is a medium sized sample text to exercise the word count script. It contains several sentences and repeated words, words, words."]
