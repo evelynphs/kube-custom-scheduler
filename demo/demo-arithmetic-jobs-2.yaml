@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-arithmetic-2
+spec:
+  template:
+    metadata:
+      labels:
+        app: arithmetic
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: arithmetic
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["python3", "/app/arithmetic_operation.py", "98765", "12", "654369", "75689"]
