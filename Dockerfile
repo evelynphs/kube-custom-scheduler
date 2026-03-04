@@ -24,6 +24,7 @@ COPY --from=builder /bin/kube-custom-scheduler /bin/kube-custom-scheduler
 COPY matrix_mult.py /app/matrix_mult.py
 COPY word_count.py /app/word_count.py
 COPY pi_estimation.py /app/pi_estimation.py
+COPY arithmetic_operation.py /app/arithmetic_operation.py
 WORKDIR /app
 
 CMD ["/bin/kube-custom-scheduler"]
