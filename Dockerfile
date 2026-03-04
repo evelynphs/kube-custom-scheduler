@@ -22,6 +22,7 @@ RUN apk add --no-cache python3 py3-numpy
 
 COPY --from=builder /bin/kube-custom-scheduler /bin/kube-custom-scheduler
 COPY matrix_mult.py /app/matrix_mult.py
+COPY word_count.py /app/word_count.py
 WORKDIR /app
 
 CMD ["/bin/kube-custom-scheduler"]
