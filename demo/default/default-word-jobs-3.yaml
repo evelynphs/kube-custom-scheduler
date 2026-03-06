@@ -12,7 +12,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: word-count
-        image: evelynphs/deadline-aware-scheduler:workload-test
+        image: evelynphs/deadline-aware-workload:word
         command: ["/bin/sh", "-c"]
         args:
         - |
