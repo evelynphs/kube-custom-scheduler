@@ -12,5 +12,5 @@ spec:
       restartPolicy: Never
       containers:
       - name: arithmetic
-        image: evelynphs/deadline-aware-scheduler:workload-test
+        image: evelynphs/deadline-aware-workload:arithmetic
         command: ["python3", "/app/arithmetic_operation.py", "2536", "43", "3632", "16280"]

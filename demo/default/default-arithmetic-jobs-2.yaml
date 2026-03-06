@@ -12,7 +12,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: arithmetic
-        image: evelynphs/deadline-aware-scheduler:workload-test
+        image: evelynphs/deadline-aware-workload:arithmetic
         command: ["/bin/sh", "-c"]
         args:
         - |
