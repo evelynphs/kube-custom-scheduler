@@ -29,7 +29,9 @@ spec:
           WALL_US=$((WALL_CS * 10000))
           MILLICORES=$(( (CPU_US * 1000) / WALL_US ))
           echo "END: ${END}"
+          echo "END_TIME: ${END_TIME}"
           echo "START: ${START}"
+          echo "START_TIME: ${START_TIME}"
           echo "WALL_CS: ${WALL_CS}"
           echo "WALL_US: ${WALL_US}"
           echo "CPU usage: ${MILLICORES}m"
