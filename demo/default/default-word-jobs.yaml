@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-word-count-default-1
+spec:
+  template:
+    metadata:
+      labels:
+        app: word-count
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: word-count
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          START=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          START_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          python3 /app/word_count.py "Hello world hello world"
+
+          END=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          END_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          CPU_US=$((END - START))
+          WALL_CS=$((END_TIME - START_TIME))
+          WALL_US=$((WALL_CS * 10000))
+          MILLICORES=$(( (CPU_US * 1000) / WALL_US ))
+          echo "END: ${END}"
+          echo "START: ${START}"
+          echo "WALL_CS: ${WALL_CS}"
+          echo "WALL_US: ${WALL_US}"
+          echo "CPU usage: ${MILLICORES}m"

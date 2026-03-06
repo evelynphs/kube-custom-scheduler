@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-matrix-mult-default-1
+spec:
+  template:
+    metadata:
+      labels:
+        app: matrix-mult
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: matrix-mult
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          START=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          START_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          python3 /app/matrix_mult.py 500 7 9
+
+          END=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          END_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          CPU_US=$((END - START))
+          WALL_CS=$((END_TIME - START_TIME))
+          WALL_US=$((WALL_CS * 10000))
+          MILLICORES=$(( (CPU_US * 1000) / WALL_US ))
+          echo "END: ${END}"
+          echo "START: ${START}"
+          echo "WALL_CS: ${WALL_CS}"
+          echo "WALL_US: ${WALL_US}"
+          echo "CPU usage: ${MILLICORES}m"

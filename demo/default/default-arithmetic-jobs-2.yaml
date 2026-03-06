@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-arithmetic-default-2
+spec:
+  template:
+    metadata:
+      labels:
+        app: arithmetic
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: arithmetic
+        image: evelynphs/deadline-aware-scheduler:workload-test
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          START=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          START_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          python3 /app/arithmetic_operation.py 98765 12 654369 75689
+
+          END=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
+          END_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
+
+          CPU_US=$((END - START))
+          WALL_CS=$((END_TIME - START_TIME))
+          WALL_US=$((WALL_CS * 10000))
+          MILLICORES=$(( (CPU_US * 1000) / WALL_US ))
+          echo "END: ${END}"
+          echo "START: ${START}"
+          echo "WALL_CS: ${WALL_CS}"
+          echo "WALL_US: ${WALL_US}"
+          echo "CPU usage: ${MILLICORES}m"
