@@ -1,4 +1,4 @@
-name: Build and Push Scheduler Image
+name: Build and Push Workload Image
 
 on:
   # pull_request:
@@ -7,7 +7,7 @@ on:
     branches: [ "test-workload" ]
 
 env:
-  IMAGE_NAME: deadline-aware-scheduler
+  IMAGE_NAME: deadline-aware-workload
 
 jobs:
   build:
@@ -31,4 +31,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: evelynphs/deadline-aware-scheduler:workload-test
+        tags: evelynphs/deadline-aware-workload:matrix
