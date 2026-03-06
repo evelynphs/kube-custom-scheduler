@@ -12,7 +12,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: pi-estimation
-        image: evelynphs/deadline-aware-scheduler:workload-test
+        image: evelynphs/deadline-aware-workload:pi
         command: ["/bin/sh", "-c"]
         args:
         - |
