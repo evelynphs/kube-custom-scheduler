@@ -19,7 +19,7 @@ spec:
           START=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
           START_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
 
-          python3 /app/matrix_mult.py 100 25 60
+          python3 /app/matrix_mult.py 1100 25 60
 
           END=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
           END_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
