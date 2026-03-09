@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-matrix-mult-1
+spec:
+  template:
+    metadata:
+      labels:
+        app: matrix-mult
+    spec:
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: matrix-mult
+        image: evelynphs/deadline-aware-workload:matrix
+        resources:
+          requests:
+            cpu: ""
+            memory: ""
+        command: ["python3", "/app/matrix_mult.py", "500", "7", "9"]
