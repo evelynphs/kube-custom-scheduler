@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: job-matrix-mult-default-3
+  name: job-matrix-mult-default-5
 spec:
   template:
     metadata:
@@ -19,7 +19,7 @@ spec:
           START=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
           START_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
 
-          python3 /app/matrix_mult.py 1000 42 87
+          python3 /app/matrix_mult.py 200 19 46
 
           END=$(cat /sys/fs/cgroup/cpu.stat | grep usage_usec | awk '{print $2}')
           END_TIME=$(awk '{print $1}' /proc/uptime | tr -d '.')
