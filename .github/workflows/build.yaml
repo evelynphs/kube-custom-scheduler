@@ -1,8 +1,8 @@
 name: Build and Push Default Image
 
 on:
-  push:
-    branches: [ "test-default" ]
+  # push:
+  #   branches: [ "test-default" ]
 
 env:
   IMAGE_NAME: deadline-default-scheduler
