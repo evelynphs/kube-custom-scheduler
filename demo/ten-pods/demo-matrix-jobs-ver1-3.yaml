@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-matrix-mult-default-3
+  annotations:
+    scheduling/deadline-duration: "968s"  
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline-duration: "968s"
+      labels:
+        app: matrix-mult
+    spec:
+      schedulerName: deadline-default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: matrix-mult
+        image: evelynphs/deadline-aware-workload:matrix
+        resources:
+          requests:
+            cpu: "1002m"
+            memory: "256Mi"
+        command: ["python3", "/app/matrix_mult.py", "1000", "42", "87"]
