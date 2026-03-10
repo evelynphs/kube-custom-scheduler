@@ -12,7 +12,7 @@ spec:
       labels:
         app: matrix-mult
     spec:
-      schedulerName: deadline-default-scheduler
+      schedulerName: deadline-aware-scheduler
       restartPolicy: Never
       containers:
       - name: matrix-mult
