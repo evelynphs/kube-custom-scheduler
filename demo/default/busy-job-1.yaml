@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: busy-job-1
+spec:
+  template:
+    metadata:
+    spec:
+      nodeName: test-cluster-worker      
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "2000m"
+            memory: "1Gi"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 1 si pengganggu"
+          echo "Processing..."
+          sleep 3600
+          echo "Task completed!"
+---
