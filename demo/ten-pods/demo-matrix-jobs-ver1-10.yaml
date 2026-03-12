@@ -3,12 +3,12 @@ kind: Job
 metadata:
   name: job-matrix-mult-default-10
   annotations:
-    scheduling/deadline-duration: "692s"  
+    scheduling/deadline-duration: "719s"  
 spec:
   template:
     metadata:
       annotations:
-        scheduling/deadline-duration: "692s"
+        scheduling/deadline-duration: "719s"
       labels:
         app: matrix-mult
     spec:
