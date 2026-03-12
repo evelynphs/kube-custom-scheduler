@@ -5,6 +5,8 @@ metadata:
 spec:
   template:
     metadata:
+      annotations:
+        scheduling/deadline-duration: "60s" #placeholder
     spec:    
       schedulerName: default-scheduler
       restartPolicy: Never
