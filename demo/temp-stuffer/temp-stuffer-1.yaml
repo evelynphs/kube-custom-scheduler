@@ -8,7 +8,7 @@ spec:
       annotations:
         scheduling/deadline-duration: "60s" #placeholder
     spec:    
-      schedulerName: default-scheduler
+      schedulerName: deadline-aware-scheduler
       restartPolicy: Never
       containers:
       - name: compute-task
