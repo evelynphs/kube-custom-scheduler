@@ -15,7 +15,7 @@ spec:
         image: busybox
         resources:
           requests:
-            cpu: "2000m"
+            cpu: "1000m"
             memory: "1Gi"
         command: ["/bin/sh", "-c"]
         args:
