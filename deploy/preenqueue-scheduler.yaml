@@ -115,6 +115,8 @@ spec:
         tier: control-plane
         version: second
     spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
       serviceAccountName: deadline-default-scheduler
       containers:
       - command:
