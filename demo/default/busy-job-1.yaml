@@ -21,6 +21,6 @@ spec:
         - |
           echo "Starting task 1 si pengganggu"
           echo "Processing..."
-          sleep 3600
+          sleep 10800
           echo "Task completed!"
 ---
