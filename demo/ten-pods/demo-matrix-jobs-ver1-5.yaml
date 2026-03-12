@@ -19,6 +19,6 @@ spec:
         image: evelynphs/deadline-aware-workload:matrix
         resources:
           requests:
-            cpu: "1503m"
+            cpu: "1083m"
             memory: "128Mi"
         command: ["python3", "/app/matrix_mult.py", "200", "19", "46"]

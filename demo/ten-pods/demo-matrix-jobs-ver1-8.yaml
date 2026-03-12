@@ -3,12 +3,12 @@ kind: Job
 metadata:
   name: job-matrix-mult-default-8
   annotations:
-    scheduling/deadline-duration: "210s"  
+    scheduling/deadline-duration: "225s"  
 spec:
   template:
     metadata:
       annotations:
-        scheduling/deadline-duration: "210s"
+        scheduling/deadline-duration: "225s"
       labels:
         app: matrix-mult
     spec:
@@ -19,6 +19,6 @@ spec:
         image: evelynphs/deadline-aware-workload:matrix
         resources:
           requests:
-            cpu: "1017m"
+            cpu: "1001m"
             memory: "256Mi"
         command: ["python3", "/app/matrix_mult.py", "600", "50", "50"]
