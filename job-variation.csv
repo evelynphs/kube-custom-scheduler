@@ -1,4 +1,4 @@
-id, trial_id, size, fill_a, fill_b, job_name, pod_name, logs_end, logs_end_time, logs_start, logs_start_time, logs_wall_cs, logs_wall_us, logs_cpu_usage,  creation_timestamp, started_at, finished_at, scheduled_at
+id, trial_id, size, fill_a, fill_b, job_name, pod_name, logs_end, logs_end_time, logs_start, logs_start_time, logs_wall_cs, logs_wall_us, logs_cpu_usage,  pod_creation_timestamp, container_creation_timestamp, started_at, finished_at, scheduled_at
 1,1,500,7,9
 1,2,500,7,9
 1,3,500,7,9
