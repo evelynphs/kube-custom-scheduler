@@ -1,15 +1,15 @@
 #!/bin/bash
 # =============================================================================
-# run_jobs.sh
+# jobs.sh
 # Jalankan job Kubernetes dari CSV, 10 kali per job ID
 # Simpan hasil ke CSV yang sama
 #
 # Cara pakai:
-#   bash run_jobs.sh --type wcet                    → semua ID dari wcet
-#   bash run_jobs.sh --type cpu                     → semua ID dari cpu
-#   bash run_jobs.sh --type wcet --id 1             → ID 1 saja
-#   bash run_jobs.sh --type cpu --id 1,2,5          → ID 1, 2, 5 saja
-#   bash run_jobs.sh --type wcet --skip-id 3,4      → semua kecuali ID 3 dan 4
+#   bash jobs.sh --type wcet                    → semua ID dari wcet
+#   bash jobs.sh --type cpu                     → semua ID dari cpu
+#   bash jobs.sh --type wcet --id 1             → ID 1 saja
+#   bash jobs.sh --type cpu --id 1,2,5          → ID 1, 2, 5 saja
+#   bash jobs.sh --type wcet --skip-id 3,4      → semua kecuali ID 3 dan 4
 # =============================================================================
 
 WAIT_TIMEOUT=1800   # maksimal tunggu pod selesai (detik) — 30 menit
@@ -132,7 +132,7 @@ tunggu_pod_selesai() {
   while [ $elapsed -lt $WAIT_TIMEOUT ]; do
     STATUS=$(kubectl get pods \
       --selector=job-name=${job_name} \
-      --no-headers 2>/dev/null | awk '{print $4}' | head -1)
+      --no-headers 2>/dev/null | awk '{print $3}' | head -1)
 
     if [ "$STATUS" = "Completed" ]; then
       echo "  Pod selesai (${elapsed}s)"
