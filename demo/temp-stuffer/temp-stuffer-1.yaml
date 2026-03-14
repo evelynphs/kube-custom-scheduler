@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temp-stuffer-1
+spec:
+  template:
+    metadata:
+      annotations:
+        scheduling/deadline-duration: "60s" #placeholder
+    spec:    
+      schedulerName: deadline-aware-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "1Gi"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting temprorary stuffer job 1"
+          echo "Processing..."
+          sleep 60
+          echo "Task completed!"
+---
