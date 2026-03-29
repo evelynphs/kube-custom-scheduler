@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # run_duplicate_attempt_cpu.sh
-# Jalankan job Kubernetes dari YAML di folder duplicate-attempt-cpu
+# Jalankan job Kubernetes dari YAML di folder CURRENT
 # Ambil metrics, simpan ke duplicate-attempt-cpu.csv
 #
 # Cara pakai:
@@ -28,6 +28,16 @@ if [ ! -f "$CSV_FILE" ]; then
   echo "$CSV_HEADER" > "$CSV_FILE"
   echo "CSV baru dibuat: $CSV_FILE"
 fi
+
+# ─── Fungsi: ambil job name dari YAML ─────────────────────────────────────────
+
+ambil_job_name_dari_yaml() {
+  local yaml_file=$1
+  # Ambil metadata.name dari YAML
+  local job_name
+  job_name=$(grep -E "^  name:" "$yaml_file" | head -1 | awk '{print $2}')
+  echo "$job_name"
+}
 
 # ─── Fungsi: parse size dan fill dari YAML ───────────────────────────────────
 
@@ -213,11 +223,8 @@ row = {
     'scheduled_at':                 '${SCHEDULED_AT}',
 }
 
-file_exists = os.path.isfile(csv_file)
 with open(csv_file, 'a', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)
-    if not file_exists:
-        writer.writeheader()
     writer.writerow(row)
 
 print(f"  CSV diupdate: id={id}, attempt_id={attempt_id}")
@@ -250,16 +257,18 @@ jalankan_job() {
   local yaml_file=$1
   local attempt_id=$2
 
-  # Ambil nama file tanpa path dan ekstensi
-  local filename
-  filename=$(basename "$yaml_file" .yaml)
-
   # Ambil ID numerik dari nama file (e.g. default-matrix-jobs-82 → 82)
   local id
-  id=$(echo "$filename" | grep -oP '\d+$')
-
-  # Job name = nama file (tanpa .yaml)
-  local job_name="$filename"
+  id=$(basename "$yaml_file" .yaml | grep -oP '\d+$')
+  
+  # Ambil job name dari YAML
+  local job_name
+  job_name=$(ambil_job_name_dari_yaml "$yaml_file")
+  
+  if [ -z "$job_name" ]; then
+    echo "  ERROR: Tidak bisa ambil job name dari YAML"
+    return 1
+  fi
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -280,7 +289,11 @@ jalankan_job() {
   
   echo "  Size: ${YAML_SIZE}, fill_a: ${YAML_FILL_A}, fill_b: ${YAML_FILL_B}"
 
-  # 1. Apply YAML
+  # 1. Hapus job lama jika ada (cleanup)
+  kubectl delete job "$job_name" --ignore-not-found=true > /dev/null 2>&1
+  sleep 2
+  
+  # 2. Apply YAML
   echo "  Menjalankan kubectl apply..."
   kubectl apply -f "$yaml_file"
   if [ $? -ne 0 ]; then
@@ -291,14 +304,14 @@ jalankan_job() {
   # Beri waktu sebentar untuk job tercreate
   sleep 2
 
-  # 2. Tunggu pod selesai
+  # 3. Tunggu pod selesai
   tunggu_pod_selesai "$job_name"
   if [ $? -ne 0 ]; then
     hapus_job "$job_name"
     return 1
   fi
 
-  # 3. Ambil pod name
+  # 4. Ambil pod name
   POD_NAME=$(ambil_pod_name "$job_name")
   if [ -z "$POD_NAME" ]; then
     echo "  ERROR: Tidak bisa ambil pod name."
@@ -307,13 +320,13 @@ jalankan_job() {
   fi
   echo "  Pod name: $POD_NAME"
 
-  # 4. Ambil logs
+  # 5. Ambil logs
   LOGS=$(ambil_logs "$POD_NAME")
   echo "  Logs:"
   echo "$LOGS" | sed 's/^/    /'
   parse_logs "$LOGS"
 
-  # 5. Ambil timestamps
+  # 6. Ambil timestamps
   ambil_timestamps "$POD_NAME"
   echo "  pod_creation_timestamp       : $POD_CREATION_TIMESTAMP"
   echo "  container_creation_timestamp : $CONTAINER_CREATION_TIMESTAMP"
@@ -321,11 +334,11 @@ jalankan_job() {
   echo "  finished_at                  : $FINISHED_AT"
   echo "  scheduled_at                 : $SCHEDULED_AT"
 
-  # 6. Append ke CSV
+  # 7. Append ke CSV
   append_csv "$id" "$attempt_id" "$job_name" "$POD_NAME" \
     "$YAML_SIZE" "$YAML_FILL_A" "$YAML_FILL_B"
 
-  # 7. Hapus job
+  # 8. Hapus job
   hapus_job "$job_name"
 
   return 0
@@ -350,7 +363,6 @@ for yaml_file in "${YAML_FILES[@]}"; do
   filename=$(basename "$yaml_file")
   
   # Tentukan berapa kali dijalankan berdasarkan ID
-  # ID 82 dijalankan 2 kali, sisanya 1 kali
   id=$(echo "$filename" | grep -oP '\d+$')
   
   if [ "$id" = "82" ]; then
