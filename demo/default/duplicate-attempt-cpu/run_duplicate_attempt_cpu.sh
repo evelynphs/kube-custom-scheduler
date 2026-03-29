@@ -6,29 +6,12 @@
 #
 # Cara pakai:
 #   bash run_duplicate_attempt_cpu.sh
-#   bash run_duplicate_attempt_cpu.sh --yaml-dir /path/ke/folder/yaml
 # =============================================================================
 
 WAIT_TIMEOUT=1800
 POLL_INTERVAL=10
-YAML_DIR="./duplicate-attempt-cpu"
+YAML_DIR="."
 CSV_FILE="duplicate-attempt-cpu.csv"
-
-# ─── Parse argumen ────────────────────────────────────────────────────────────
-
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --yaml-dir)
-      YAML_DIR="$2"
-      shift 2
-      ;;
-    *)
-      echo "Argumen tidak dikenal: $1"
-      echo "Cara pakai: bash run_duplicate_attempt_cpu.sh [--yaml-dir path]"
-      exit 1
-      ;;
-  esac
-done
 
 # ─── Validasi ─────────────────────────────────────────────────────────────────
 
@@ -50,24 +33,31 @@ fi
 
 parse_yaml_args() {
   local yaml_file=$1
-
-  # Ambil baris args dari YAML, cari pattern "python3 /app/matrix_mult.py SIZE FILL_A FILL_B"
-  local args_line
-  args_line=$(grep -A1 "matrix_mult.py" "$yaml_file" 2>/dev/null | grep "matrix_mult.py" | head -1)
-
-  YAML_SIZE=$(echo "$args_line" | grep -oP 'matrix_mult\.py\s+\K\S+')
-  YAML_FILL_A=$(echo "$args_line" | grep -oP 'matrix_mult\.py\s+\S+\s+\K\S+')
-  YAML_FILL_B=$(echo "$args_line" | grep -oP 'matrix_mult\.py\s+\S+\s+\S+\s+\K\S+')
-
-  # Fallback: cari di args list (format: args dengan item terpisah)
-  if [ -z "$YAML_SIZE" ]; then
-    # Cari pola: python3 /app/matrix_mult.py di dalam block args
-    local full_args
-    full_args=$(grep -A5 "matrix_mult.py" "$yaml_file" 2>/dev/null | tr '\n' ' ')
-    YAML_SIZE=$(echo "$full_args"   | grep -oP 'matrix_mult\.py\s+\K[0-9]+')
-    YAML_FILL_A=$(echo "$full_args" | grep -oP 'matrix_mult\.py\s+[0-9]+\s+\K\S+')
-    YAML_FILL_B=$(echo "$full_args" | grep -oP 'matrix_mult\.py\s+[0-9]+\s+\S+\s+\K\S+')
+  
+  # Baca command dari YAML (format: command: ["/bin/sh", "-c"])
+  local cmd_line
+  cmd_line=$(grep -A1 "command:" "$yaml_file" | grep -E 'matrix_mult\.py' | head -1)
+  
+  if [ -z "$cmd_line" ]; then
+    # Coba format args
+    cmd_line=$(grep -A5 "matrix_mult.py" "$yaml_file" | grep -E 'matrix_mult\.py' | head -1)
   fi
+  
+  # Parse size, fill_a, fill_b
+  YAML_SIZE=$(echo "$cmd_line" | grep -oP 'matrix_mult\.py\s+\K\d+')
+  YAML_FILL_A=$(echo "$cmd_line" | grep -oP 'matrix_mult\.py\s+\d+\s+\K\S+')
+  YAML_FILL_B=$(echo "$cmd_line" | grep -oP 'matrix_mult\.py\s+\d+\s+\S+\s+\K\S+')
+  
+  # Fallback: cari di args section
+  if [ -z "$YAML_SIZE" ]; then
+    local args_section
+    args_section=$(awk '/args:/{flag=1} flag && /- /{print; if(/\]/ || /\]\]/) exit}' "$yaml_file" | tr -d ' -')
+    YAML_SIZE=$(echo "$args_section" | grep -oP 'matrix_mult\.py\s+\K\d+')
+    YAML_FILL_A=$(echo "$args_section" | grep -oP 'matrix_mult\.py\s+\d+\s+\K\S+')
+    YAML_FILL_B=$(echo "$args_section" | grep -oP 'matrix_mult\.py\s+\d+\s+\S+\s+\K\S+')
+  fi
+  
+  echo "  Parsed: size=$YAML_SIZE, fill_a=$YAML_FILL_A, fill_b=$YAML_FILL_B"
 }
 
 # ─── Fungsi: tunggu pod selesai ───────────────────────────────────────────────
@@ -79,28 +69,48 @@ tunggu_pod_selesai() {
   echo "  Menunggu pod selesai..."
 
   while [ $elapsed -lt $WAIT_TIMEOUT ]; do
-    STATUS=$(kubectl get pods \
-      --selector=job-name=${job_name} \
-      --no-headers 2>/dev/null | awk '{print $3}' | head -1)
-
-    if [ "$STATUS" = "Completed" ]; then
+    # Ambil semua pods untuk job ini
+    PODS=$(kubectl get pods --selector=job-name=${job_name} --no-headers 2>/dev/null)
+    
+    if [ -z "$PODS" ]; then
+      echo "  Belum ada pod yang tercipta... (${elapsed}s)"
+      sleep $POLL_INTERVAL
+      elapsed=$((elapsed + POLL_INTERVAL))
+      continue
+    fi
+    
+    # Cek status semua pods
+    COMPLETED=0
+    FAILED=0
+    
+    while IFS= read -r line; do
+      STATUS=$(echo "$line" | awk '{print $3}')
+      if [ "$STATUS" = "Completed" ]; then
+        COMPLETED=1
+      elif [ "$STATUS" = "Error" ] || [ "$STATUS" = "OOMKilled" ] || [ "$STATUS" = "CrashLoopBackOff" ] || [ "$STATUS" = "Failed" ]; then
+        FAILED=1
+        echo "  ERROR: Pod gagal dengan status $STATUS"
+      fi
+    done <<< "$PODS"
+    
+    if [ $COMPLETED -eq 1 ]; then
       echo "  Pod selesai (${elapsed}s)"
       return 0
-    elif [ "$STATUS" = "Error" ] || [ "$STATUS" = "OOMKilled" ] || [ "$STATUS" = "CrashLoopBackOff" ]; then
-      echo "  ERROR: Pod gagal dengan status $STATUS"
+    elif [ $FAILED -eq 1 ]; then
       return 1
     fi
 
     sleep $POLL_INTERVAL
     elapsed=$((elapsed + POLL_INTERVAL))
-    echo "  Masih berjalan... (${elapsed}s, status: ${STATUS})"
+    FIRST_POD_STATUS=$(echo "$PODS" | head -1 | awk '{print $3}')
+    echo "  Masih berjalan... (${elapsed}s, status: ${FIRST_POD_STATUS})"
   done
 
   echo "  TIMEOUT: Pod tidak selesai dalam ${WAIT_TIMEOUT} detik"
   return 1
 }
 
-# ─── Fungsi: ambil pod name ───────────────────────────────────────────────────
+# ─── Fungsi: ambil pod name (yang completed) ─────────────────────────────────
 
 ambil_pod_name() {
   local job_name=$1
@@ -164,7 +174,7 @@ for c in conditions:
 " 2>/dev/null)
 }
 
-# ─── Fungsi: append baris ke CSV ─────────────────────────────────────────────
+# ─── Fungsi: append ke CSV ─────────────────────────────────────────────────
 
 append_csv() {
   local id=$1
@@ -206,9 +216,11 @@ row = {
 file_exists = os.path.isfile(csv_file)
 with open(csv_file, 'a', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)
+    if not file_exists:
+        writer.writeheader()
     writer.writerow(row)
 
-print(f"  CSV diupdate: id=${id}, attempt_id=${attempt_id}")
+print(f"  CSV diupdate: id={id}, attempt_id={attempt_id}")
 PYEOF
 }
 
@@ -218,7 +230,18 @@ hapus_job() {
   local job_name=$1
   echo "  Menghapus job ${job_name}..."
   kubectl delete job "$job_name" --ignore-not-found=true > /dev/null 2>&1
-  echo "  Job dihapus."
+  
+  # Tunggu sampai benar-benar terhapus
+  local elapsed=0
+  while [ $elapsed -lt 60 ]; do
+    if ! kubectl get job "$job_name" --no-headers 2>/dev/null | grep -q .; then
+      echo "  Job berhasil dihapus."
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  echo "  Warning: Job mungkin masih dalam proses penghapusan."
 }
 
 # ─── Fungsi utama: jalankan satu job ─────────────────────────────────────────
@@ -246,6 +269,15 @@ jalankan_job() {
 
   # Parse size dan fill dari YAML
   parse_yaml_args "$yaml_file"
+  
+  # Validasi hasil parsing
+  if [ -z "$YAML_SIZE" ] || [ -z "$YAML_FILL_A" ] || [ -z "$YAML_FILL_B" ]; then
+    echo "  ERROR: Gagal parse size/fill dari YAML"
+    echo "  Coba baca file YAML untuk debug:"
+    cat "$yaml_file" | grep -A5 -B5 "matrix_mult.py"
+    return 1
+  fi
+  
   echo "  Size: ${YAML_SIZE}, fill_a: ${YAML_FILL_A}, fill_b: ${YAML_FILL_B}"
 
   # 1. Apply YAML
@@ -255,6 +287,9 @@ jalankan_job() {
     echo "  ERROR: kubectl apply gagal."
     return 1
   fi
+  
+  # Beri waktu sebentar untuk job tercreate
+  sleep 2
 
   # 2. Tunggu pod selesai
   tunggu_pod_selesai "$job_name"
@@ -296,14 +331,6 @@ jalankan_job() {
   return 0
 }
 
-# ─── Daftar YAML dengan attempt count ────────────────────────────────────────
-# Format: "nama_file.yaml:jumlah_attempt"
-# ID 82 dijalanin 2 kali, sisanya 1 kali
-
-declare -A ATTEMPT_COUNT
-ATTEMPT_COUNT["default-matrix-jobs-82.yaml"]=2
-# Semua file lain default = 1
-
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 echo "============================================================"
@@ -313,14 +340,36 @@ echo "  CSV      : $CSV_FILE"
 echo "============================================================"
 
 # Loop semua YAML di folder, diurutkan
-for yaml_file in $(ls -v "$YAML_DIR"/*.yaml 2>/dev/null); do
+YAML_FILES=($(ls -v "$YAML_DIR"/*.yaml 2>/dev/null))
+if [ ${#YAML_FILES[@]} -eq 0 ]; then
+  echo "ERROR: Tidak ada file YAML ditemukan di $YAML_DIR"
+  exit 1
+fi
+
+for yaml_file in "${YAML_FILES[@]}"; do
   filename=$(basename "$yaml_file")
-
-  # Tentukan berapa kali dijalanin
-  max_attempt=${ATTEMPT_COUNT["$filename"]:-1}
-
+  
+  # Tentukan berapa kali dijalankan berdasarkan ID
+  # ID 82 dijalankan 2 kali, sisanya 1 kali
+  id=$(echo "$filename" | grep -oP '\d+$')
+  
+  if [ "$id" = "82" ]; then
+    max_attempt=2
+  else
+    max_attempt=1
+  fi
+  
+  echo ""
+  echo ">>> Memproses $filename (ID=$id, akan dijalankan $max_attempt kali)"
+  
   for (( attempt=1; attempt<=max_attempt; attempt++ )); do
     jalankan_job "$yaml_file" "$attempt"
+    
+    # Tunggu sebentar antar attempt biar resources bersih
+    if [ $attempt -lt $max_attempt ]; then
+      echo "  Menunggu 5 detik sebelum attempt ke-$((attempt+1))..."
+      sleep 5
+    fi
   done
 done
 
