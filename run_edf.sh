@@ -116,17 +116,18 @@ get_pod_metrics() {
     local pod_json
     pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null || echo "")
 
-    # Trim whitespace + validasi JSON sebelum di-pipe ke python
-    pod_json=$(echo "$pod_json" | tr -d '[:space:]' | head -c 1)
-    if [[ "$pod_json" != "{" ]]; then
+    # Validasi pakai variabel terpisah, jangan timpa pod_json asli
+    local first_char
+    first_char=$(echo "$pod_json" | tr -d '[:space:]' | head -c 1)
+
+    if [[ "$first_char" != "{" ]]; then
         echo "N/A|N/A|N/A|N/A|N/A"
         return
     fi
 
-    # Re-fetch karena sudah di-trim tadi
-    pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null || echo "")
-
+    # pod_json masih utuh, langsung pipe ke python
     echo "$pod_json" | python3 - <<'PYEOF'
+    
 import sys, json
 
 raw = sys.stdin.read()
