@@ -285,10 +285,6 @@ run_scenario() {
         echo "  [DONE] $jname"
     done
 
-    # ==================================================================
-    # TAHAP 3: Ambil metrics + tulis CSV
-    # ==================================================================
-    echo ""
     echo "--- TAHAP 3: Ambil metrics dan tulis CSV ---"
     for i in "${!T_ORDER[@]}"; do
         local order="${T_ORDER[$i]}"
@@ -307,12 +303,20 @@ run_scenario() {
             continue
         fi
 
+        # Bug 1 fix: tangkap error eksplisit
         local metrics
-        metrics=$(get_pod_metrics "$pod_name")
+        metrics=$(get_pod_metrics "$pod_name") || metrics="N/A|N/A|N/A|N/A|N/A"
+
+        local pod_created container_creation container_started finished_at scheduled_at
         IFS='|' read -r pod_created container_creation container_started finished_at scheduled_at <<< "$metrics"
 
+        # Bug 2 fix: skip calc kalau N/A
         local queue_wait
-        queue_wait=$(calc_queue_wait "$pod_created" "$arrival")
+        if [[ "$pod_created" == "N/A" ]]; then
+            queue_wait="N/A"
+        else
+            queue_wait=$(calc_queue_wait "$pod_created" "$arrival") || queue_wait="N/A"
+        fi
 
         echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_created},${container_creation},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  -> ditulis ke ${out_csv}"
