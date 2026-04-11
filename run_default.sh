@@ -29,7 +29,7 @@ declare -A JOB_DATA
 load_job_data() {
     while IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime; do
         [[ "$ori_id" == "ID" ]] && continue
-        JOB_DATA["$ori_id"]="${size},${fill_a},${fill_b},${cpu_usage},${max_runtime}"
+        JOB_DATA[$ori_id]="${size},${fill_a},${fill_b},${cpu_usage},${max_runtime}"
     done < "$JOBS_CSV"
     echo "  [INFO] Loaded ${#JOB_DATA[@]} records dari $JOBS_CSV"
 }
