@@ -34,7 +34,7 @@ RHO_MAP[low]=0.50
 RHO_MAP[medium]=0.75
 RHO_MAP[high]=0.95
 
-CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,pod_start_time,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
+CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
 
 ensure_csv() {
     echo "$CSV_HEADER" > "$1"
@@ -144,10 +144,10 @@ watch_job() {
         return
     fi
 
-    local pod_creation pod_start_time container_started_at finished_at scheduled_at queue_wait
+    local pod_creation container_creation_timestamp container_started_at finished_at scheduled_at queue_wait
 
     pod_creation=$(get_field "$pod_name" '{.metadata.creationTimestamp}' 3)
-    pod_start_time=$(get_field "$pod_name" '{.status.startTime}' 3)
+    container_creation_timestamp=$(get_field "$pod_name" '{.status.startTime}' 3)
     container_started_at=$(get_field "$pod_name" \
         '{.status.containerStatuses[0].state.terminated.startedAt}' 5)
     finished_at=$(get_field "$pod_name" \
@@ -163,7 +163,7 @@ watch_job() {
         echo "METRICS_STATUS=OK"
         echo "POD_NAME=${pod_name}"
         echo "POD_CREATION=${pod_creation}"
-        echo "POD_START_TIME=${pod_start_time}"
+        echo "CONTAINER_CREATION_TIMESTAMP=${container_creation_timestamp}"
         echo "CONTAINER_STARTED_AT=${container_started_at}"
         echo "FINISHED_AT=${finished_at}"
         echo "SCHEDULED_AT=${scheduled_at}"
@@ -298,8 +298,8 @@ run_scenario() {
         local arrival="${T_ARRIVAL[$i]}"
         local tmp_file="/tmp/metrics_${i}.txt"
 
-        local status pod_name pod_creation pod_start container_started finished_at scheduled_at queue_wait
-        status="MISSING"; pod_name="N/A"; pod_creation="N/A"; pod_start="N/A"
+        local status pod_name pod_creation container_creation_timestamp container_started finished_at scheduled_at queue_wait
+        status="MISSING"; pod_name="N/A"; pod_creation="N/A"; container_creation_timestamp="N/A"
         container_started="N/A"; finished_at="N/A"; scheduled_at="N/A"; queue_wait="N/A"
 
         if [[ -f "$tmp_file" ]]; then
@@ -308,7 +308,7 @@ run_scenario() {
                     METRICS_STATUS)       status="$val" ;;
                     POD_NAME)             pod_name="$val" ;;
                     POD_CREATION)         pod_creation="$val" ;;
-                    POD_START_TIME)       pod_start="$val" ;;
+                    CONTAINER_CREATION_TIMESTAMP) container_creation_timestamp="$val" ;;
                     CONTAINER_STARTED_AT) container_started="$val" ;;
                     FINISHED_AT)          finished_at="$val" ;;
                     SCHEDULED_AT)         scheduled_at="$val" ;;
@@ -317,7 +317,7 @@ run_scenario() {
             done < "$tmp_file"
         fi
 
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${container_creation_timestamp},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  [WRITE] order=${order} ${job_name} | status=${status}"
     done
 
