@@ -1,7 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# run_default.sh
-# Jalanin DEFAULT scheduler dengan timing arrival SAMA PERSIS seperti EDF.
+# run_default.sh  —  Default scheduler, replay timing arrival dari EDF CSV
 #
 # Cara replay timing:
 #   - Baca arrival_timestamp tiap job dari edf_*.csv
@@ -9,23 +8,7 @@
 #   - Catat start_epoch saat eksperimen default mulai
 #   - Sebelum apply job ke-i: sleep sampai (start_epoch + offset[i]) tercapai
 #
-# Alur:
-#   1. Buat output CSV kalau belum ada
-#   2. Baca EDF CSV, hitung offset tiap job
-#   3. Apply job satu-satu sesuai timing replay, catat arrival_timestamp aktual
-#   4. Tunggu SEMUA pod Completed
-#   5. Ambil metrics dari kubectl get pod -o json
-#   6. Tulis CSV
-#
-# Field yang diambil dari kubectl get pod -o json:
-#   - metadata.creationTimestamp                              -> pod_creation_timestamp
-#   - status.startTime                                        -> container_creation_timestamp
-#   - status.containerStatuses[0].state.terminated.startedAt  -> started_at
-#   - status.containerStatuses[0].state.terminated.finishedAt -> finished_at
-#   - status.conditions[type=PodScheduled].lastTransitionTime -> scheduled_at
-#
-# Dependensi : kubectl, python3
-# Usage      : bash run_default.sh [low|medium|high|all]   (default: all)
+# Usage: bash run_default.sh [low|medium|high|all]   (default: all)
 # =============================================================================
 
 set -euo pipefail
@@ -33,7 +16,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # KONFIGURASI
 # ---------------------------------------------------------------------------
-# JOBS_CSV="experiment.csv"
 JOBS_CSV="experiment_five.csv"
 YAML_TEMPLATE="job.yaml"
 NAMESPACE="default"
@@ -50,8 +32,14 @@ CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timest
 declare -A JOB_DATA
 
 load_job_data() {
+    local first=1
     while IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime; do
-        [[ "$ori_id" == "ID" ]] && continue
+        # Skip header baris pertama
+        if [[ $first -eq 1 ]]; then
+            first=0
+            continue
+        fi
+        [[ -z "$ori_id" ]] && continue
         JOB_DATA["$ori_id"]="${size},${fill_a},${fill_b},${cpu_usage},${max_runtime}"
     done < "$JOBS_CSV"
     echo "  [INFO] Loaded ${#JOB_DATA[@]} job records dari $JOBS_CSV"
@@ -97,7 +85,7 @@ wait_for_pod_completed() {
 # ---------------------------------------------------------------------------
 # Ambil metrics dari kubectl get pod -o json
 # Output (pipe-separated):
-#   pod_creation | pod_start_time | container_started_at | finished_at | scheduled_at
+#   pod_creation_timestamp | container_creation_timestamp | started_at | finished_at | scheduled_at
 # ---------------------------------------------------------------------------
 get_pod_metrics() {
     local pod_name=$1
@@ -115,19 +103,22 @@ import sys, json
 
 d = json.load(sys.stdin)
 
+# metadata.creationTimestamp -> pod_creation_timestamp
 pod_creation = d["metadata"].get("creationTimestamp", "N/A")
 
+# status.startTime -> container_creation_timestamp (waktu kubelet terima pod)
 container_creation_timestamp = d.get("status", {}).get("startTime", "N/A")
 
+# containerStatuses[0].state.terminated -> started_at, finished_at
 try:
     term = d["status"]["containerStatuses"][0]["state"]["terminated"]
-    started_at = term.get("startedAt", "N/A")
-    finished_at          = term.get("finishedAt", "N/A")
+    started_at  = term.get("startedAt",  "N/A")
+    finished_at = term.get("finishedAt", "N/A")
 except (KeyError, IndexError):
-    container_creation_timestamp = "N/A"
-    started_at = "N/A"
-    finished_at          = "N/A"
+    started_at  = "N/A"
+    finished_at = "N/A"
 
+# conditions[type=PodScheduled].lastTransitionTime -> scheduled_at
 scheduled_at = "N/A"
 for cond in d.get("status", {}).get("conditions", []):
     if cond.get("type") == "PodScheduled":
@@ -147,8 +138,8 @@ calc_queue_wait() {
     python3 - <<PYEOF
 from datetime import datetime, timezone
 try:
-    ts   = datetime.fromisoformat("$pod_creation_iso".replace("Z", "+00:00"))
-    wait = ts.timestamp() - float("$arrival_epoch")
+    ts   = datetime.fromisoformat("${pod_creation_iso}".replace("Z", "+00:00"))
+    wait = ts.timestamp() - float("${arrival_epoch}")
     print(f"{wait:.3f}")
 except Exception:
     print("N/A")
@@ -178,10 +169,11 @@ run_scenario() {
     ensure_csv "$out_csv"
 
     # ------------------------------------------------------------------
-    # Baca EDF CSV
-    # Kolom: order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,
-    #        arrival_timestamp,pod_creation_timestamp,pod_start_time,
-    #        container_started_at,finished_at,scheduled_at,queue_wait_seconds
+    # Baca EDF CSV -> simpan arrays untuk replay
+    # Kolom EDF CSV:
+    #   order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,
+    #   arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,
+    #   started_at,finished_at,scheduled_at,queue_wait_seconds
     # ------------------------------------------------------------------
     declare -a E_ORDER E_ORI_ID E_SIZE E_FILL_A E_FILL_B E_JOB_NAME E_ARRIVAL E_OFFSET
 
@@ -192,8 +184,9 @@ run_scenario() {
         e_order e_rho e_ori_id e_size e_fill_a e_fill_b \
         e_job_name e_pod_name e_arrival _rest; do
 
+        # Skip header
         [[ "$e_order" == "order" ]] && continue
-        [[ -z "$e_order" ]]        && continue
+        [[ -z "$e_order" ]]         && continue
 
         [[ -z "$first_arrival" ]] && first_arrival="$e_arrival"
 
@@ -225,7 +218,7 @@ run_scenario() {
     echo ""
 
     # ==================================================================
-    # TAHAP 1: Apply job satu-satu dengan timing replay
+    # TAHAP 1: Apply job satu-satu dengan timing replay dari EDF
     # ==================================================================
     echo "--- TAHAP 1: Apply jobs (replay timing EDF) ---"
     for i in "${!E_ORDER[@]}"; do
@@ -242,6 +235,7 @@ print(f"{max(0.0, needed):.3f}")
 PYEOF
 )
 
+        # Sleep kalau masih perlu nunggu (> 50ms)
         if python3 -c "exit(0 if float('$sleep_needed') > 0.05 else 1)" 2>/dev/null; then
             echo "[${E_ORDER[$i]}/${total}] Menunggu ${sleep_needed}s (offset=${offset}s dari start)..."
             sleep "$sleep_needed"
@@ -250,7 +244,7 @@ PYEOF
         local arrival_epoch
         arrival_epoch=$(python3 -c "import time; print(f'{time.time():.6f}')")
 
-        # Lookup data job
+        # Lookup data job dari JOBS_CSV berdasarkan ori_id
         local job_info="${JOB_DATA[$ori_id]:-}"
         if [[ -z "$job_info" ]]; then
             echo "  [WARN] ori_id=$ori_id tidak ada di $JOBS_CSV" >&2
@@ -267,6 +261,7 @@ PYEOF
 
         IFS=',' read -r size fill_a fill_b cpu_usage max_runtime <<< "$job_info"
 
+        # Nama job default = nama EDF + "-def" supaya tidak collision
         local orig_job_name="${E_JOB_NAME[$i]}"
         local def_job_name="${orig_job_name}-def"
 
@@ -286,6 +281,7 @@ PYEOF
         kubectl apply -f "$tmp_yaml" -n "$NAMESPACE"
         rm -f "$tmp_yaml"
 
+        # Tunggu pod muncul (max 60s)
         local pod_name=""
         local wp=0
         while [[ -z "$pod_name" && $wp -lt 60 ]]; do
@@ -346,12 +342,12 @@ PYEOF
 
         local metrics
         metrics=$(get_pod_metrics "$pod_name")
-        IFS='|' read -r pod_created pod_start container_started finished_at scheduled_at <<< "$metrics"
+        IFS='|' read -r pod_created container_creation container_started finished_at scheduled_at <<< "$metrics"
 
         local queue_wait
         queue_wait=$(calc_queue_wait "$pod_created" "$arrival")
 
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${def_job_name},${pod_name},${arrival},${pod_created},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${def_job_name},${pod_name},${arrival},${pod_created},${container_creation},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  -> ditulis ke ${out_csv}"
     done
 

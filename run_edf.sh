@@ -1,26 +1,23 @@
 #!/bin/bash
 # =============================================================================
-# run_edf.sh
-# Jalanin EDF scheduler — apply semua job langsung (tanpa jeda Poisson).
-# Tujuan utama: catat URUTAN dan ARRIVAL TIMESTAMP tiap job,
-# supaya run_default.sh bisa replay timing yang sama persis.
+# run_edf.sh  —  EDF scheduler dengan Poisson inter-arrival
 #
 # Alur:
-#   1. Buat output CSV kalau belum ada
-#   2. Apply semua job satu per satu, catat arrival_timestamp real-time
-#   3. Tunggu SEMUA pod berstatus Completed (phase=Succeeded)
-#   4. Ambil metrics dari kubectl get pod -o json untuk semua pod
-#   5. Tulis hasil ke CSV
+#   1. Buat output CSV
+#   2. Generate inter-arrival times Poisson (lambda = rho * c * mu)
+#   3. Apply job satu per satu, tunggu sesuai inter-arrival time Poisson,
+#      catat arrival_timestamp real-time
+#   4. Tunggu SEMUA pod berstatus Succeeded
+#   5. Ambil metrics dari kubectl get pod -o json
+#   6. Tulis hasil ke CSV
 #
-# Field yang diambil dari kubectl get pod -o json:
-#   - metadata.creationTimestamp                              -> pod_creation_timestamp
-#   - status.startTime                                        -> container_creation_timestamp
-#   - status.containerStatuses[0].state.terminated.startedAt  -> started_at
-#   - status.containerStatuses[0].state.terminated.finishedAt -> finished_at
-#   - status.conditions[type=PodScheduled].lastTransitionTime -> scheduled_at
+# Parameter M/M/c:
+#   c   = 10 (paralel server: 12 core / 1.1 core per job = 10)
+#   mu  = 0.0015 (1 / avg_runtime, avg_runtime=678.18s)
+#   rho_low=0.50, rho_medium=0.75, rho_high=0.95
+#   lambda = rho * c * mu
 #
-# Dependensi : kubectl, python3
-# Usage      : bash run_edf.sh [low|medium|high|all]   (default: all)
+# Usage: bash run_edf.sh [low|medium|high|all]   (default: all)
 # =============================================================================
 
 set -euo pipefail
@@ -28,7 +25,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # KONFIGURASI
 # ---------------------------------------------------------------------------
-# JOBS_CSV="experiment.csv"
 JOBS_CSV="experiment_five.csv"
 YAML_TEMPLATE="job.yaml"
 NAMESPACE="default"
@@ -36,28 +32,48 @@ JOB_TIMEOUT=2000
 POLL_INTERVAL=5
 OUTPUT_DIR="."
 
+# M/M/c parameters
+C_SERVERS=10
+MU=0.0015   # 1 / 678.18
+
 declare -A RHO_MAP
-RHO_MAP[low]=0.5
+RHO_MAP[low]=0.50
 RHO_MAP[medium]=0.75
 RHO_MAP[high]=0.95
 
-# Kolom:
-#   arrival_timestamp   = Unix epoch float saat kubectl apply dipanggil
-#   pod_creation_timestamp = metadata.creationTimestamp
-#   container_creation_timestamp      = status.startTime (waktu pod diterima kubelet)
-#   started_at          = containerStatuses[0].terminated.startedAt
-#   finished_at         = containerStatuses[0].terminated.finishedAt
-#   scheduled_at        = conditions[PodScheduled].lastTransitionTime
-#   queue_wait_seconds  = pod_creation_timestamp - arrival_timestamp
 CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,started_at,finished_at,scheduled_at,queue_wait_seconds"
 
 # ---------------------------------------------------------------------------
-# Buat CSV dengan header kalau belum ada (atau timpa kalau sudah ada)
+# Buat CSV dengan header (timpa kalau sudah ada)
 # ---------------------------------------------------------------------------
 ensure_csv() {
     local csv_path=$1
     echo "$CSV_HEADER" > "$csv_path"
     echo "  [CSV] Siap: $csv_path"
+}
+
+# ---------------------------------------------------------------------------
+# Generate N inter-arrival times dari distribusi Exponential(lambda)
+# Output: satu nilai float per baris (dalam detik)
+# ---------------------------------------------------------------------------
+generate_interarrivals() {
+    local n=$1
+    local rho=$2
+    python3 - <<PYEOF
+import random, math
+rho   = float("$rho")
+c     = int("$C_SERVERS")
+mu    = float("$MU")
+lam   = rho * c * mu          # arrival rate (job/detik)
+scale = 1.0 / lam             # mean inter-arrival = 1/lambda
+random.seed(42)
+for _ in range(int("$n")):
+    # Exponential via inverse-CDF: -ln(U)/lambda
+    u = random.random()
+    while u == 0:
+        u = random.random()
+    print(f"{-math.log(u) * scale:.6f}")
+PYEOF
 }
 
 # ---------------------------------------------------------------------------
@@ -91,7 +107,7 @@ wait_for_pod_completed() {
 # ---------------------------------------------------------------------------
 # Ambil metrics dari kubectl get pod -o json
 # Output (pipe-separated):
-#   pod_creation | pod_start_time | container_started_at | finished_at | scheduled_at
+#   pod_creation_timestamp | container_creation_timestamp | started_at | finished_at | scheduled_at
 # ---------------------------------------------------------------------------
 get_pod_metrics() {
     local pod_name=$1
@@ -109,25 +125,29 @@ import sys, json
 
 d = json.load(sys.stdin)
 
+# metadata.creationTimestamp -> pod_creation_timestamp
 pod_creation = d["metadata"].get("creationTimestamp", "N/A")
 
+# status.startTime -> container_creation_timestamp (waktu kubelet terima pod)
 container_creation_timestamp = d.get("status", {}).get("startTime", "N/A")
 
+# containerStatuses[0].state.terminated -> started_at, finished_at
 try:
     term = d["status"]["containerStatuses"][0]["state"]["terminated"]
-    started_at = term.get("startedAt", "N/A")
-    finished_at          = term.get("finishedAt", "N/A")
+    started_at  = term.get("startedAt",  "N/A")
+    finished_at = term.get("finishedAt", "N/A")
 except (KeyError, IndexError):
-    container_started_at = "N/A"
-    finished_at          = "N/A"
+    started_at  = "N/A"
+    finished_at = "N/A"
 
+# conditions[type=PodScheduled].lastTransitionTime -> scheduled_at
 scheduled_at = "N/A"
 for cond in d.get("status", {}).get("conditions", []):
     if cond.get("type") == "PodScheduled":
         scheduled_at = cond.get("lastTransitionTime", "N/A")
         break
 
-print(f"{pod_creation}|{pod_start_time}|{container_started_at}|{finished_at}|{scheduled_at}")
+print(f"{pod_creation}|{container_creation_timestamp}|{started_at}|{finished_at}|{scheduled_at}")
 PYEOF
 }
 
@@ -140,8 +160,8 @@ calc_queue_wait() {
     python3 - <<PYEOF
 from datetime import datetime, timezone
 try:
-    ts   = datetime.fromisoformat("$pod_creation_iso".replace("Z", "+00:00"))
-    wait = ts.timestamp() - float("$arrival_epoch")
+    ts   = datetime.fromisoformat("${pod_creation_iso}".replace("Z", "+00:00"))
+    wait = ts.timestamp() - float("${arrival_epoch}")
     print(f"{wait:.3f}")
 except Exception:
     print("N/A")
@@ -158,26 +178,41 @@ run_scenario() {
 
     echo "=============================================="
     echo " Skenario EDF  : rho=${rho_label} (rho=${rho_val})"
+    echo " lambda        : $(python3 -c "print(f'{float(\"$rho_val\") * ${C_SERVERS} * ${MU}:.6f}') " ) job/s"
     echo " Output CSV    : ${out_csv}"
     echo "=============================================="
 
     ensure_csv "$out_csv"
 
+    # Baca semua baris job dari CSV (skip header)
     mapfile -t JOB_LINES < <(tail -n +2 "$JOBS_CSV")
     local total=${#JOB_LINES[@]}
+
+    # Generate inter-arrival times Poisson
+    mapfile -t INTERARRIVALS < <(generate_interarrivals "$total" "$rho_val")
+
+    echo "  [INFO] Total job: ${total}"
+    echo "  [INFO] Inter-arrival sample (3 pertama detik): ${INTERARRIVALS[0]}, ${INTERARRIVALS[1]}, ${INTERARRIVALS[2]}"
+    echo ""
 
     declare -a T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B
     declare -a T_JOB_NAME T_POD_NAME T_ARRIVAL
 
     # ==================================================================
-    # TAHAP 1: Apply semua job langsung, catat arrival_timestamp
+    # TAHAP 1: Apply job satu-satu dengan Poisson inter-arrival timing
     # ==================================================================
-    echo ""
-    echo "--- TAHAP 1: Apply jobs ---"
+    echo "--- TAHAP 1: Apply jobs (Poisson arrival) ---"
     for i in "${!JOB_LINES[@]}"; do
         local line="${JOB_LINES[$i]}"
         IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime <<< "$line"
         local order=$((i + 1))
+
+        # Tunggu inter-arrival sebelum apply (kecuali job pertama)
+        if [[ $i -gt 0 ]]; then
+            local wait_s="${INTERARRIVALS[$i]}"
+            echo "[${order}/${total}] Menunggu inter-arrival ${wait_s}s ..."
+            sleep "$wait_s"
+        fi
 
         local arrival_epoch
         arrival_epoch=$(python3 -c "import time; print(f'{time.time():.6f}')")
@@ -197,6 +232,7 @@ run_scenario() {
         kubectl apply -f "$tmp_yaml" -n "$NAMESPACE"
         rm -f "$tmp_yaml"
 
+        # Tunggu pod muncul (max 60s)
         local pod_name=""
         local wp=0
         while [[ -z "$pod_name" && $wp -lt 60 ]]; do
@@ -257,12 +293,12 @@ run_scenario() {
 
         local metrics
         metrics=$(get_pod_metrics "$pod_name")
-        IFS='|' read -r pod_created pod_start container_started finished_at scheduled_at <<< "$metrics"
+        IFS='|' read -r pod_created container_creation container_started finished_at scheduled_at <<< "$metrics"
 
         local queue_wait
         queue_wait=$(calc_queue_wait "$pod_created" "$arrival")
 
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_created},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_created},${container_creation},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  -> ditulis ke ${out_csv}"
     done
 

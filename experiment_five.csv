@@ -1,6 +1,6 @@
 ID,job_name,size,fill_a,fill_b,cpu_usage,max_runtime
 1,job-matrix-mult-1,500,7,9,1001,135
-2,job-matrix-mult-2,700,14,35,999,344
-3,job-matrix-mult-3,1000,42,87,997,972
-4,job-matrix-mult-4,1100,25,60,997,1297
+2,job-matrix-mult-2,700,14,35,999,34
 5,job-matrix-mult-5,200,19,46,1082,8
+6,job-matrix-mult-6,300,6,21,1020,28
+7,job-matrix-mult-7,400,99,98,1008,65
