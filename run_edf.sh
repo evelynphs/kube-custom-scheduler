@@ -34,7 +34,8 @@ OUTPUT_DIR="."
 
 # M/M/c parameters
 C_SERVERS=10
-MU=0.0015   # 1 / 678.18
+# MU=0.0015   # 1 / 678.18
+MU=0.00862 # 1 / 116
 
 declare -A RHO_MAP
 RHO_MAP[low]=0.50
