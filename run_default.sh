@@ -27,14 +27,39 @@ CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timest
 declare -A JOB_DATA
 
 load_job_data() {
+    local line_num=0
     while IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime; do
+        line_num=$((line_num + 1))
+        # Skip header
         [[ "$ori_id" == "ID" ]] && continue
+        # Skip empty lines
+        [[ -z "$ori_id" || -z "$job_name" ]] && continue
+        
+        # Trim whitespace
+        ori_id=$(echo "$ori_id" | xargs)
+        job_name=$(echo "$job_name" | xargs)
+        size=$(echo "$size" | xargs)
+        fill_a=$(echo "$fill_a" | xargs)
+        fill_b=$(echo "$fill_b" | xargs)
+        cpu_usage=$(echo "$cpu_usage" | xargs)
+        max_runtime=$(echo "$max_runtime" | xargs)
+        
+        # Store in associative array - menggunakan subscript tanpa kutip
         JOB_DATA[$ori_id]="${size},${fill_a},${fill_b},${cpu_usage},${max_runtime}"
+        
+        # Debug: tampilkan loading
+        echo "  [DEBUG] Loaded ID $ori_id: $job_name (max_runtime: $max_runtime)" >&2
     done < "$JOBS_CSV"
+    
     echo "  [INFO] Loaded ${#JOB_DATA[@]} records dari $JOBS_CSV"
+    
+    # Debug: tampilkan semua keys
+    echo "  [DEBUG] Available IDs: ${!JOB_DATA[*]}" >&2
 }
 
 ensure_csv() {
+    # Hapus file lama jika ada
+    [[ -f "$1" ]] && rm -f "$1"
     echo "$CSV_HEADER" > "$1"
     echo "  [CSV] Siap: $1"
 }
@@ -52,7 +77,10 @@ get_field() {
     while [[ $attempt -lt $max_retries ]]; do
         val=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
             -o jsonpath="$jpath" 2>/dev/null || echo "")
-        [[ -n "$val" ]] && echo "$val" && return 0
+        if [[ -n "$val" && "$val" != "N/A" ]]; then
+            echo "$val"
+            return 0
+        fi
         sleep 3
         attempt=$((attempt + 1))
     done
@@ -67,17 +95,29 @@ calc_queue_wait() {
     local pod_creation_iso=$1
     local arrival_ts=$2
 
-    [[ "$pod_creation_iso" == "N/A" ]] && echo "N/A" && return
-    [[ "$arrival_ts" == "N/A" ]] && echo "N/A" && return
+    [[ "$pod_creation_iso" == "N/A" || -z "$pod_creation_iso" ]] && echo "N/A" && return
+    [[ "$arrival_ts" == "N/A" || -z "$arrival_ts" ]] && echo "N/A" && return
 
     local pod_epoch arrival_epoch wait_s sign=""
-    pod_epoch=$(date -d "$pod_creation_iso" +%s 2>/dev/null || echo "")
-    arrival_epoch=$(date -d "$arrival_ts" +%s 2>/dev/null || echo "")
+    
+    # Konversi ke epoch
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        pod_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$pod_creation_iso" +%s 2>/dev/null || echo "")
+        arrival_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$arrival_ts" +%s 2>/dev/null || echo "")
+    else
+        # Linux
+        pod_epoch=$(date -d "$pod_creation_iso" +%s 2>/dev/null || echo "")
+        arrival_epoch=$(date -d "$arrival_ts" +%s 2>/dev/null || echo "")
+    fi
 
     [[ -z "$pod_epoch" || -z "$arrival_epoch" ]] && echo "N/A" && return
 
     wait_s=$(( pod_epoch - arrival_epoch ))
-    [[ $wait_s -lt 0 ]] && sign="-" && wait_s=$(( -wait_s ))
+    if [[ $wait_s -lt 0 ]]; then
+        sign="-"
+        wait_s=$(( -wait_s ))
+    fi
     printf "%s%d\n" "$sign" "$wait_s"
 }
 
@@ -93,31 +133,39 @@ watch_job() {
 
     local elapsed=0
     local phase="Unknown"
+    
     while [[ $elapsed -lt $JOB_TIMEOUT ]]; do
         phase=$(kubectl get pods -n "$NAMESPACE" \
             --selector="job-name=${job_name}" \
             --output=jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "Unknown")
-        [[ "$phase" == "Succeeded" ]] && break
-        [[ "$phase" == "Failed" ]]   && break
+        
+        if [[ "$phase" == "Succeeded" ]]; then
+            break
+        elif [[ "$phase" == "Failed" ]]; then
+            echo "  [WARN] $job_name Failed" >&2
+            echo "METRICS_STATUS=FAILED" > "$tmp_file"
+            return
+        fi
         sleep "$POLL_INTERVAL"
         elapsed=$((elapsed + POLL_INTERVAL))
     done
 
     if [[ "$phase" != "Succeeded" ]]; then
-        echo "METRICS_STATUS=FAILED" > "$tmp_file"
-        echo "  [WARN] $job_name tidak Succeeded (phase=$phase)" >&2
+        echo "METRICS_STATUS=TIMEOUT" > "$tmp_file"
+        echo "  [WARN] $job_name timeout setelah ${JOB_TIMEOUT}s (phase=$phase)" >&2
         return
     fi
 
     # Refresh pod_name kalau belum dapat
-    if [[ "$pod_name" == "NOT_FOUND" ]]; then
+    if [[ "$pod_name" == "NOT_FOUND" || -z "$pod_name" ]]; then
         pod_name=$(kubectl get pods -n "$NAMESPACE" \
             --selector="job-name=${job_name}" \
             --output=jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "NOT_FOUND")
     fi
 
-    if [[ "$pod_name" == "NOT_FOUND" ]]; then
+    if [[ "$pod_name" == "NOT_FOUND" || -z "$pod_name" ]]; then
         echo "METRICS_STATUS=NO_POD" > "$tmp_file"
+        echo "  [WARN] $job_name: pod tidak ditemukan" >&2
         return
     fi
 
@@ -129,9 +177,11 @@ watch_job() {
         '{.status.containerStatuses[0].state.terminated.startedAt}' 5)
     finished_at=$(get_field "$pod_name" \
         '{.status.containerStatuses[0].state.terminated.finishedAt}' 5)
+    
+    # Get scheduled_at dengan cara yang lebih robust
     scheduled_at=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
-        -o go-template='{{range .status.conditions}}{{if eq .type "PodScheduled"}}{{.lastTransitionTime}}{{end}}{{end}}' \
-        2>/dev/null || echo "N/A")
+        -o jsonpath='{.status.conditions[?(@.type=="PodScheduled")].lastTransitionTime}' \
+        2>/dev/null | cut -d' ' -f1 | tr -d '"')
     [[ -z "$scheduled_at" ]] && scheduled_at="N/A"
 
     queue_wait=$(calc_queue_wait "$pod_creation" "$arrival_epoch")
@@ -172,28 +222,46 @@ run_scenario() {
     ensure_csv "$out_csv"
 
     # Baca EDF CSV
-    # Kolom: order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,
-    #        arrival_timestamp,...
     declare -a E_ORDER E_ORI_ID E_SIZE E_FILL_A E_FILL_B E_JOB_NAME E_ARRIVAL E_OFFSET
 
     local idx=0
     local first_arrival=""
+    local line_num=0
 
     while IFS=',' read -r \
         e_order e_rho e_ori_id e_size e_fill_a e_fill_b \
         e_job_name e_pod_name e_arrival _rest; do
+        
+        line_num=$((line_num + 1))
+        
+        # Skip header dan baris kosong
+        [[ "$e_order" == "order" || -z "$e_order" ]] && continue
+        
+        # Trim whitespace
+        e_order=$(echo "$e_order" | xargs)
+        e_ori_id=$(echo "$e_ori_id" | xargs)
+        e_size=$(echo "$e_size" | xargs)
+        e_fill_a=$(echo "$e_fill_a" | xargs)
+        e_fill_b=$(echo "$e_fill_b" | xargs)
+        e_job_name=$(echo "$e_job_name" | xargs)
+        e_arrival=$(echo "$e_arrival" | xargs)
 
-        [[ "$e_order" == "order" ]] && continue
-        [[ -z "$e_order" ]]        && continue
+        # Set first arrival
+        if [[ -z "$first_arrival" ]]; then
+            first_arrival="$e_arrival"
+        fi
 
-        [[ -z "$first_arrival" ]] && first_arrival="$e_arrival"
-
-        # Offset dalam detik (integer) dari job pertama
-        local arr_int fa_int
-        arr_int=$(echo "$e_arrival"    | cut -d'.' -f1)
-        fa_int=$(echo  "$first_arrival" | cut -d'.' -f1)
-        local offset
-        offset=$(( $(date -d "$e_arrival" +%s) - $(date -d "$first_arrival" +%s) ))
+        # Hitung offset dalam detik
+        local offset=0
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            local arr_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$e_arrival" +%s 2>/dev/null || echo "0")
+            local fa_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$first_arrival" +%s 2>/dev/null || echo "0")
+            offset=$((arr_epoch - fa_epoch))
+        else
+            # Linux
+            offset=$(( $(date -d "$e_arrival" +%s) - $(date -d "$first_arrival" +%s) ))
+        fi
 
         E_ORDER[$idx]=$e_order
         E_ORI_ID[$idx]=$e_ori_id
@@ -203,7 +271,8 @@ run_scenario() {
         E_JOB_NAME[$idx]=$e_job_name
         E_ARRIVAL[$idx]=$e_arrival
         E_OFFSET[$idx]=$offset
-        idx=$((idx+1))
+        
+        idx=$((idx + 1))
     done < "$edf_csv"
 
     local total=${#E_ORDER[@]}
@@ -224,15 +293,16 @@ run_scenario() {
     # TAHAP 1: Apply job satu-satu dengan timing replay + spawn watcher
     # ==================================================================
     echo "--- TAHAP 1: Apply jobs (replay timing EDF) ---"
-    for i in "${!E_ORDER[@]}"; do
+    
+    for i in $(seq 0 $((total - 1))); do
         local ori_id="${E_ORI_ID[$i]}"
         local offset="${E_OFFSET[$i]}"
 
         # Hitung berapa detik lagi harus nunggu
         local now elapsed sleep_needed
         now=$(date +%s)
-        elapsed=$(( now - start_epoch ))
-        sleep_needed=$(( offset - elapsed ))
+        elapsed=$((now - start_epoch))
+        sleep_needed=$((offset - elapsed))
 
         if [[ $sleep_needed -gt 0 ]]; then
             echo "[${E_ORDER[$i]}/${total}] Menunggu ${sleep_needed}s (offset=${offset}s)..."
@@ -245,6 +315,7 @@ run_scenario() {
 
         # Lookup data job
         local job_info="${JOB_DATA[$ori_id]:-}"
+        
         if [[ -z "$job_info" ]]; then
             echo "  [WARN] ori_id=$ori_id tidak ada di $JOBS_CSV" >&2
             T_ORDER[$i]="${E_ORDER[$i]}"
@@ -254,18 +325,20 @@ run_scenario() {
             T_FILL_B[$i]="${E_FILL_B[$i]}"
             T_DEF_JOB_NAME[$i]="UNKNOWN"
             T_ARRIVAL_DEF[$i]=$arrival_epoch
-            # Dummy background job supaya index BG_PIDS tidak bolong
+            # Dummy background job
             ( echo "METRICS_STATUS=NO_DATA" > "/tmp/metrics_def_${i}.txt" ) &
             BG_PIDS[$i]=$!
             continue
         fi
 
+        # Parse job_info
         IFS=',' read -r size fill_a fill_b cpu_usage max_runtime <<< "$job_info"
 
         local def_job_name="${E_JOB_NAME[$i]}-def"
 
         local tmp_yaml
         tmp_yaml=$(mktemp /tmp/job_def_XXXXXX.yaml)
+        
         sed \
             -e "s|<job_name>|${def_job_name}|g" \
             -e "s|<max_runtime>|${max_runtime}|g" \
@@ -277,7 +350,13 @@ run_scenario() {
             "$YAML_TEMPLATE" > "$tmp_yaml"
 
         echo "[${E_ORDER[$i]}/${total}] APPLY ${def_job_name} | arrival=${arrival_epoch}"
-        kubectl apply -f "$tmp_yaml" -n "$NAMESPACE"
+        
+        if ! kubectl apply -f "$tmp_yaml" -n "$NAMESPACE"; then
+            echo "  [ERROR] Gagal apply ${def_job_name}" >&2
+            rm -f "$tmp_yaml"
+            continue
+        fi
+        
         rm -f "$tmp_yaml"
 
         # Ambil pod name
@@ -287,10 +366,20 @@ run_scenario() {
             pod_name=$(kubectl get pods -n "$NAMESPACE" \
                 --selector="job-name=${def_job_name}" \
                 --output=jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-            [[ -z "$pod_name" ]] && { sleep 2; wp=$((wp+2)); }
+            if [[ -z "$pod_name" ]]; then
+                sleep 2
+                wp=$((wp + 2))
+            else
+                break
+            fi
         done
-        [[ -z "$pod_name" ]] && pod_name="NOT_FOUND"
-        echo "  -> pod: ${pod_name}"
+        
+        if [[ -z "$pod_name" ]]; then
+            pod_name="NOT_FOUND"
+            echo "  [WARN] Pod tidak ditemukan untuk ${def_job_name}" >&2
+        else
+            echo "  -> pod: ${pod_name}"
+        fi
 
         T_ORDER[$i]="${E_ORDER[$i]}"
         T_ORI_ID[$i]=$ori_id
@@ -300,6 +389,7 @@ run_scenario() {
         T_DEF_JOB_NAME[$i]=$def_job_name
         T_ARRIVAL_DEF[$i]=$arrival_epoch
 
+        # Jalankan watcher di background
         watch_job "$i" "$def_job_name" "$pod_name" "$arrival_epoch" &
         BG_PIDS[$i]=$!
         echo "  -> watcher PID: ${BG_PIDS[$i]}"
@@ -310,9 +400,12 @@ run_scenario() {
     # ==================================================================
     echo ""
     echo "--- TAHAP 2: Menunggu semua watcher selesai ---"
+    
     for i in "${!BG_PIDS[@]}"; do
-        wait "${BG_PIDS[$i]}" || true
-        echo "  [WATCHER DONE] index=${i} (${T_DEF_JOB_NAME[$i]})"
+        if [[ -n "${BG_PIDS[$i]}" ]]; then
+            wait "${BG_PIDS[$i]}" 2>/dev/null || true
+            echo "  [WATCHER DONE] index=${i} (${T_DEF_JOB_NAME[$i]:-UNKNOWN})"
+        fi
     done
 
     # ==================================================================
@@ -320,19 +413,25 @@ run_scenario() {
     # ==================================================================
     echo ""
     echo "--- TAHAP 3: Tulis CSV (urutan apply) ---"
-    for i in "${!T_ORDER[@]}"; do
-        local order="${T_ORDER[$i]}"
-        local ori_id="${T_ORI_ID[$i]}"
-        local size="${T_SIZE[$i]}"
-        local fill_a="${T_FILL_A[$i]}"
-        local fill_b="${T_FILL_B[$i]}"
-        local def_job_name="${T_DEF_JOB_NAME[$i]}"
-        local arrival="${T_ARRIVAL_DEF[$i]}"
+    
+    for i in $(seq 0 $((total - 1))); do
+        local order="${T_ORDER[$i]:-}"
+        local ori_id="${T_ORI_ID[$i]:-}"
+        local size="${T_SIZE[$i]:-N/A}"
+        local fill_a="${T_FILL_A[$i]:-N/A}"
+        local fill_b="${T_FILL_B[$i]:-N/A}"
+        local def_job_name="${T_DEF_JOB_NAME[$i]:-UNKNOWN}"
+        local arrival="${T_ARRIVAL_DEF[$i]:-N/A}"
         local tmp_file="/tmp/metrics_def_${i}.txt"
 
-        local status pod_name pod_creation pod_start container_started finished_at scheduled_at queue_wait
-        status="MISSING"; pod_name="N/A"; pod_creation="N/A"; pod_start="N/A"
-        container_started="N/A"; finished_at="N/A"; scheduled_at="N/A"; queue_wait="N/A"
+        local status="MISSING"
+        local pod_name="N/A"
+        local pod_creation="N/A"
+        local pod_start="N/A"
+        local container_started="N/A"
+        local finished_at="N/A"
+        local scheduled_at="N/A"
+        local queue_wait="N/A"
 
         if [[ -f "$tmp_file" ]]; then
             while IFS='=' read -r key val; do
@@ -349,13 +448,17 @@ run_scenario() {
             done < "$tmp_file"
         fi
 
+        # Write to CSV
         echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${def_job_name},${pod_name},${arrival},${pod_creation},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  [WRITE] order=${order} ${def_job_name} | status=${status}"
     done
 
+    # Cleanup
     rm -f /tmp/metrics_def_*.txt
-    unset T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B T_DEF_JOB_NAME T_ARRIVAL_DEF BG_PIDS
+    
+    # Unset arrays
     unset E_ORDER E_ORI_ID E_SIZE E_FILL_A E_FILL_B E_JOB_NAME E_ARRIVAL E_OFFSET
+    unset T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B T_DEF_JOB_NAME T_ARRIVAL_DEF BG_PIDS
 
     echo ""
     echo "Selesai default ${rho_label} -> ${out_csv}"
@@ -365,7 +468,27 @@ run_scenario() {
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+# Cek versi bash
+if [[ ${BASH_VERSINFO[0]} -lt 4 ]]; then
+    echo "[ERROR] Bash version 4 or higher required" >&2
+    echo "Current version: ${BASH_VERSION}" >&2
+    exit 1
+fi
+
+# Load job data
 load_job_data
+
+# Validasi file requirements
+if [[ ! -f "$YAML_TEMPLATE" ]]; then
+    echo "[ERROR] YAML template tidak ditemukan: $YAML_TEMPLATE" >&2
+    exit 1
+fi
+
+if [[ ! -f "$JOBS_CSV" ]]; then
+    echo "[ERROR] Jobs CSV tidak ditemukan: $JOBS_CSV" >&2
+    exit 1
+fi
 
 MODE="${1:-all}"
 case "$MODE" in
