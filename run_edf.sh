@@ -1,172 +1,177 @@
 #!/bin/bash
 # =============================================================================
-# run_edf.sh  —  EDF scheduler dengan Poisson inter-arrival
-#
-# Alur:
-#   1. Buat output CSV
-#   2. Generate inter-arrival times Poisson (lambda = rho * c * mu)
-#   3. Apply job satu per satu, tunggu sesuai inter-arrival time Poisson,
-#      catat arrival_timestamp real-time
-#   4. Tunggu SEMUA pod berstatus Succeeded
-#   5. Ambil metrics dari kubectl get pod -o json
-#   6. Tulis hasil ke CSV
-#
-# Parameter M/M/c:
-#   c   = 10 (paralel server: 12 core / 1.1 core per job = 10)
-#   mu  = 0.0015 (1 / avg_runtime, avg_runtime=678.18s)
-#   rho_low=0.50, rho_medium=0.75, rho_high=0.95
-#   lambda = rho * c * mu
+# run_edf.sh
+# Apply semua job langsung (tanpa jeda), catat arrival_timestamp tiap job.
+# Tiap job punya background watcher — begitu pod Succeeded, langsung
+# ambil metrics dan tulis ke file sementara /tmp/metrics_<i>.txt.
+# Setelah semua background watcher selesai, CSV ditulis sesuai urutan apply.
 #
 # Usage: bash run_edf.sh [low|medium|high|all]   (default: all)
 # =============================================================================
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# KONFIGURASI
-# ---------------------------------------------------------------------------
-JOBS_CSV="experiment_five.csv"
-YAML_TEMPLATE="job.yaml"
+JOBS_CSV="jobs.csv"
+YAML_TEMPLATE="job-template.yaml"
 NAMESPACE="default"
 JOB_TIMEOUT=2000
 POLL_INTERVAL=5
 OUTPUT_DIR="."
 
-# M/M/c parameters
-C_SERVERS=10
-# MU=0.0015   # 1 / 678.18
-MU=0.00862 # 1 / 116
-
 declare -A RHO_MAP
-RHO_MAP[low]=0.50
+RHO_MAP[low]=0.5
 RHO_MAP[medium]=0.75
 RHO_MAP[high]=0.95
 
-CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,started_at,finished_at,scheduled_at,queue_wait_seconds"
+CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,pod_start_time,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
 
-# ---------------------------------------------------------------------------
-# Buat CSV dengan header (timpa kalau sudah ada)
-# ---------------------------------------------------------------------------
 ensure_csv() {
-    local csv_path=$1
-    echo "$CSV_HEADER" > "$csv_path"
-    echo "  [CSV] Siap: $csv_path"
+    echo "$CSV_HEADER" > "$1"
+    echo "  [CSV] Siap: $1"
 }
 
 # ---------------------------------------------------------------------------
-# Generate N inter-arrival times dari distribusi Exponential(lambda)
-# Output: satu nilai float per baris (dalam detik)
+# Ambil satu field jsonpath dari pod, dengan retry sampai nilainya non-kosong
+# Usage: get_field <pod_name> <jsonpath> <max_retries>
 # ---------------------------------------------------------------------------
-generate_interarrivals() {
-    local n=$1
-    local rho=$2
-    python3 - <<PYEOF
-import random, math
-rho   = float("$rho")
-c     = int("$C_SERVERS")
-mu    = float("$MU")
-lam   = rho * c * mu          # arrival rate (job/detik)
-scale = 1.0 / lam             # mean inter-arrival = 1/lambda
-random.seed(42)
-for _ in range(int("$n")):
-    # Exponential via inverse-CDF: -ln(U)/lambda
-    u = random.random()
-    while u == 0:
-        u = random.random()
-    print(f"{-math.log(u) * scale:.6f}")
-PYEOF
+get_field() {
+    local pod_name=$1
+    local jpath=$2
+    local max_retries=${3:-1}
+    local val=""
+    local attempt=0
+
+    while [[ $attempt -lt $max_retries ]]; do
+        val=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+            -o jsonpath="$jpath" 2>/dev/null || echo "")
+        [[ -n "$val" ]] && echo "$val" && return 0
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    echo "N/A"
 }
 
 # ---------------------------------------------------------------------------
-# Tunggu pod dari suatu job sampai phase=Succeeded atau timeout
+# Hitung queue_wait_seconds = pod_creation (ISO) - arrival_epoch (unix float)
+# Pure bash dengan date -d
 # ---------------------------------------------------------------------------
-wait_for_pod_completed() {
-    local job_name=$1
+calc_queue_wait() {
+    local pod_creation_iso=$1   # e.g. 2026-03-12T12:04:07Z
+    local arrival_epoch=$2      # e.g. 1741780647.123456
+
+    [[ "$pod_creation_iso" == "N/A" ]] && echo "N/A" && return
+
+    # Konversi ISO ke epoch (detik, integer) pakai date
+    local pod_epoch
+    pod_epoch=$(date -d "$pod_creation_iso" +%s 2>/dev/null || echo "")
+    [[ -z "$pod_epoch" ]] && echo "N/A" && return
+
+    # Hitung selisih — arrival_epoch bisa float, ambil integer bagiannya
+    local arrival_int
+    arrival_int=$(echo "$arrival_epoch" | cut -d'.' -f1)
+    local arrival_frac
+    arrival_frac=$(echo "$arrival_epoch" | cut -d'.' -f2)
+
+    # wait = pod_epoch - arrival_epoch  (pembulatan ke 1 desimal)
+    # Karena bash hanya integer: hitung dalam milidetik
+    local pod_ms=$((pod_epoch * 1000))
+    # arrival dalam ms: gabung integer + 3 digit pertama fraksi
+    local frac3="${arrival_frac:0:3}"   # ambil 3 digit (milidetik)
+    local arrival_ms=$(( arrival_int * 1000 + 10#$frac3 ))
+    local wait_ms=$(( pod_ms - arrival_ms ))
+
+    # Format jadi detik dengan 3 desimal
+    local sign=""
+    if [[ $wait_ms -lt 0 ]]; then
+        sign="-"
+        wait_ms=$(( -wait_ms ))
+    fi
+    printf "%s%d.%03d\n" "$sign" "$((wait_ms / 1000))" "$((wait_ms % 1000))"
+}
+
+# ---------------------------------------------------------------------------
+# Background watcher untuk satu job:
+#   - Poll sampai pod Succeeded (atau timeout)
+#   - Ambil semua metrics via jsonpath (pure bash)
+#   - Tulis ke /tmp/metrics_<idx>.txt
+# ---------------------------------------------------------------------------
+watch_job() {
+    local idx=$1
+    local job_name=$2
+    local pod_name=$3
+    local arrival_epoch=$4
+    local tmp_file="/tmp/metrics_${idx}.txt"
+
+    # Tunggu pod Succeeded
     local elapsed=0
-
+    local phase="Unknown"
     while [[ $elapsed -lt $JOB_TIMEOUT ]]; do
-        local phase
         phase=$(kubectl get pods -n "$NAMESPACE" \
             --selector="job-name=${job_name}" \
             --output=jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "Unknown")
-
-        if [[ "$phase" == "Succeeded" ]]; then
-            return 0
-        elif [[ "$phase" == "Failed" ]]; then
-            echo "  [WARN] Pod untuk $job_name FAILED" >&2
-            return 1
-        fi
-
+        [[ "$phase" == "Succeeded" ]] && break
+        [[ "$phase" == "Failed" ]]   && break
         sleep "$POLL_INTERVAL"
         elapsed=$((elapsed + POLL_INTERVAL))
     done
 
-    echo "  [WARN] Timeout ${JOB_TIMEOUT}s menunggu $job_name" >&2
-    return 1
-}
-
-# ---------------------------------------------------------------------------
-# Ambil metrics dari kubectl get pod -o json
-# Output (pipe-separated):
-#   pod_creation_timestamp | container_creation_timestamp | started_at | finished_at | scheduled_at
-# ---------------------------------------------------------------------------
-get_pod_metrics() {
-    local pod_name=$1
-
-    local pod_json
-    pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null)
-
-    if [[ -z "$pod_json" ]]; then
-        echo "N/A|N/A|N/A|N/A|N/A"
+    if [[ "$phase" != "Succeeded" ]]; then
+        echo "METRICS_STATUS=FAILED" > "$tmp_file"
+        echo "  [WARN] $job_name tidak Succeeded (phase=$phase, elapsed=${elapsed}s)" >&2
         return
     fi
 
-    echo "$pod_json" | python3 - <<'PYEOF'
-import sys, json
+    # Ambil pod_name kalau masih NOT_FOUND (mungkin sudah muncul sekarang)
+    if [[ "$pod_name" == "NOT_FOUND" ]]; then
+        pod_name=$(kubectl get pods -n "$NAMESPACE" \
+            --selector="job-name=${job_name}" \
+            --output=jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "NOT_FOUND")
+    fi
 
-d = json.load(sys.stdin)
+    if [[ "$pod_name" == "NOT_FOUND" ]]; then
+        echo "METRICS_STATUS=NO_POD" > "$tmp_file"
+        return
+    fi
 
-# metadata.creationTimestamp -> pod_creation_timestamp
-pod_creation = d["metadata"].get("creationTimestamp", "N/A")
+    # --- Ambil semua field ---
+    local pod_creation
+    pod_creation=$(get_field "$pod_name" '{.metadata.creationTimestamp}' 3)
 
-# status.startTime -> container_creation_timestamp (waktu kubelet terima pod)
-container_creation_timestamp = d.get("status", {}).get("startTime", "N/A")
+    local pod_start_time
+    pod_start_time=$(get_field "$pod_name" '{.status.startTime}' 3)
 
-# containerStatuses[0].state.terminated -> started_at, finished_at
-try:
-    term = d["status"]["containerStatuses"][0]["state"]["terminated"]
-    started_at  = term.get("startedAt",  "N/A")
-    finished_at = term.get("finishedAt", "N/A")
-except (KeyError, IndexError):
-    started_at  = "N/A"
-    finished_at = "N/A"
+    local container_started_at
+    container_started_at=$(get_field "$pod_name" \
+        '{.status.containerStatuses[0].state.terminated.startedAt}' 5)
 
-# conditions[type=PodScheduled].lastTransitionTime -> scheduled_at
-scheduled_at = "N/A"
-for cond in d.get("status", {}).get("conditions", []):
-    if cond.get("type") == "PodScheduled":
-        scheduled_at = cond.get("lastTransitionTime", "N/A")
-        break
+    local finished_at
+    finished_at=$(get_field "$pod_name" \
+        '{.status.containerStatuses[0].state.terminated.finishedAt}' 5)
 
-print(f"{pod_creation}|{container_creation_timestamp}|{started_at}|{finished_at}|{scheduled_at}")
-PYEOF
-}
+    # scheduled_at: pakai go-template karena jsonpath tidak bisa filter conditions
+    local scheduled_at
+    scheduled_at=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o go-template='{{range .status.conditions}}{{if eq .type "PodScheduled"}}{{.lastTransitionTime}}{{end}}{{end}}' \
+        2>/dev/null || echo "N/A")
+    [[ -z "$scheduled_at" ]] && scheduled_at="N/A"
 
-# ---------------------------------------------------------------------------
-# Hitung queue_wait_seconds = pod_creation_epoch - arrival_epoch
-# ---------------------------------------------------------------------------
-calc_queue_wait() {
-    local pod_creation_iso=$1
-    local arrival_epoch=$2
-    python3 - <<PYEOF
-from datetime import datetime, timezone
-try:
-    ts   = datetime.fromisoformat("${pod_creation_iso}".replace("Z", "+00:00"))
-    wait = ts.timestamp() - float("${arrival_epoch}")
-    print(f"{wait:.3f}")
-except Exception:
-    print("N/A")
-PYEOF
+    local queue_wait
+    queue_wait=$(calc_queue_wait "$pod_creation" "$arrival_epoch")
+
+    # Tulis hasil ke tmp file
+    {
+        echo "METRICS_STATUS=OK"
+        echo "POD_NAME=${pod_name}"
+        echo "POD_CREATION=${pod_creation}"
+        echo "POD_START_TIME=${pod_start_time}"
+        echo "CONTAINER_STARTED_AT=${container_started_at}"
+        echo "FINISHED_AT=${finished_at}"
+        echo "SCHEDULED_AT=${scheduled_at}"
+        echo "QUEUE_WAIT=${queue_wait}"
+    } > "$tmp_file"
+
+    echo "  [DONE] $job_name -> $tmp_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -179,45 +184,36 @@ run_scenario() {
 
     echo "=============================================="
     echo " Skenario EDF  : rho=${rho_label} (rho=${rho_val})"
-    echo " lambda        : $(python3 -c "print(f'{float(\"$rho_val\") * ${C_SERVERS} * ${MU}:.6f}') " ) job/s"
     echo " Output CSV    : ${out_csv}"
     echo "=============================================="
 
     ensure_csv "$out_csv"
 
-    # Baca semua baris job dari CSV (skip header)
     mapfile -t JOB_LINES < <(tail -n +2 "$JOBS_CSV")
     local total=${#JOB_LINES[@]}
 
-    # Generate inter-arrival times Poisson
-    mapfile -t INTERARRIVALS < <(generate_interarrivals "$total" "$rho_val")
+    # Array state
+    declare -a T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B T_JOB_NAME T_ARRIVAL
+    declare -a BG_PIDS   # PID tiap background watcher
 
-    echo "  [INFO] Total job: ${total}"
-    echo "  [INFO] Inter-arrival sample (3 pertama detik): ${INTERARRIVALS[0]}, ${INTERARRIVALS[1]}, ${INTERARRIVALS[2]}"
+    # Bersihkan tmp files dari run sebelumnya
+    rm -f /tmp/metrics_*.txt
+
+    # ==================================================================
+    # TAHAP 1: Apply semua job, spawn background watcher tiap job
+    # ==================================================================
     echo ""
-
-    declare -a T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B
-    declare -a T_JOB_NAME T_POD_NAME T_ARRIVAL
-
-    # ==================================================================
-    # TAHAP 1: Apply job satu-satu dengan Poisson inter-arrival timing
-    # ==================================================================
-    echo "--- TAHAP 1: Apply jobs (Poisson arrival) ---"
+    echo "--- TAHAP 1: Apply jobs + spawn watchers ---"
     for i in "${!JOB_LINES[@]}"; do
         local line="${JOB_LINES[$i]}"
         IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime <<< "$line"
         local order=$((i + 1))
 
-        # Tunggu inter-arrival sebelum apply (kecuali job pertama)
-        if [[ $i -gt 0 ]]; then
-            local wait_s="${INTERARRIVALS[$i]}"
-            echo "[${order}/${total}] Menunggu inter-arrival ${wait_s}s ..."
-            sleep "$wait_s"
-        fi
-
+        # Catat arrival tepat sebelum apply
         local arrival_epoch
-        arrival_epoch=$(python3 -c "import time; print(f'{time.time():.6f}')")
+        arrival_epoch=$(date +%s%N | awk '{printf "%.6f\n", $1/1000000000}')
 
+        # Render YAML
         local tmp_yaml
         tmp_yaml=$(mktemp /tmp/job_edf_XXXXXX.yaml)
         sed \
@@ -233,7 +229,7 @@ run_scenario() {
         kubectl apply -f "$tmp_yaml" -n "$NAMESPACE"
         rm -f "$tmp_yaml"
 
-        # Tunggu pod muncul (max 60s)
+        # Ambil pod name (poll singkat, max 60s)
         local pod_name=""
         local wp=0
         while [[ -z "$pod_name" && $wp -lt 60 ]]; do
@@ -243,38 +239,39 @@ run_scenario() {
             [[ -z "$pod_name" ]] && { sleep 2; wp=$((wp+2)); }
         done
         [[ -z "$pod_name" ]] && pod_name="NOT_FOUND"
-
         echo "  -> pod: ${pod_name}"
 
+        # Simpan state
         T_ORDER[$i]=$order
         T_ORI_ID[$i]=$ori_id
         T_SIZE[$i]=$size
         T_FILL_A[$i]=$fill_a
         T_FILL_B[$i]=$fill_b
         T_JOB_NAME[$i]=$job_name
-        T_POD_NAME[$i]=$pod_name
         T_ARRIVAL[$i]=$arrival_epoch
+
+        # Spawn background watcher untuk job ini
+        watch_job "$i" "$job_name" "$pod_name" "$arrival_epoch" &
+        BG_PIDS[$i]=$!
+        echo "  -> watcher PID: ${BG_PIDS[$i]}"
     done
 
     # ==================================================================
-    # TAHAP 2: Tunggu SEMUA pod Completed
+    # TAHAP 2: Tunggu semua background watcher selesai
+    # (tiap watcher sudah nulis ke /tmp/metrics_<i>.txt saat pod-nya done)
     # ==================================================================
     echo ""
-    echo "--- TAHAP 2: Menunggu semua pod Completed ---"
-    for i in "${!T_JOB_NAME[@]}"; do
-        local jname="${T_JOB_NAME[$i]}"
-        local pname="${T_POD_NAME[$i]}"
-        [[ "$pname" == "NOT_FOUND" ]] && { echo "  [SKIP] $jname — pod tidak ditemukan"; continue; }
-        echo "  [WAIT] $jname (pod: $pname) ..."
-        wait_for_pod_completed "$jname" || true
-        echo "  [DONE] $jname"
+    echo "--- TAHAP 2: Menunggu semua watcher selesai ---"
+    for i in "${!BG_PIDS[@]}"; do
+        wait "${BG_PIDS[$i]}" || true
+        echo "  [WATCHER DONE] job index=${i} (${T_JOB_NAME[$i]})"
     done
 
     # ==================================================================
-    # TAHAP 3: Ambil metrics + tulis CSV
+    # TAHAP 3: Tulis CSV sesuai URUTAN APPLY (bukan urutan selesai)
     # ==================================================================
     echo ""
-    echo "--- TAHAP 3: Ambil metrics dan tulis CSV ---"
+    echo "--- TAHAP 3: Tulis CSV (urutan apply) ---"
     for i in "${!T_ORDER[@]}"; do
         local order="${T_ORDER[$i]}"
         local ori_id="${T_ORI_ID[$i]}"
@@ -282,28 +279,46 @@ run_scenario() {
         local fill_a="${T_FILL_A[$i]}"
         local fill_b="${T_FILL_B[$i]}"
         local job_name="${T_JOB_NAME[$i]}"
-        local pod_name="${T_POD_NAME[$i]}"
         local arrival="${T_ARRIVAL[$i]}"
+        local tmp_file="/tmp/metrics_${i}.txt"
 
-        echo "  [METRICS] $job_name / $pod_name"
+        echo "  [WRITE] order=${order} ${job_name}"
 
-        if [[ "$pod_name" == "NOT_FOUND" ]]; then
-            echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},N/A,${arrival},N/A,N/A,N/A,N/A,N/A,N/A" >> "$out_csv"
-            continue
+        # Baca tmp file metrics
+        local status pod_name pod_creation pod_start container_started finished_at scheduled_at queue_wait
+        status="MISSING"
+        pod_name="N/A"
+        pod_creation="N/A"
+        pod_start="N/A"
+        container_started="N/A"
+        finished_at="N/A"
+        scheduled_at="N/A"
+        queue_wait="N/A"
+
+        if [[ -f "$tmp_file" ]]; then
+            # Source file tmp — tiap baris KEY=VALUE
+            while IFS='=' read -r key val; do
+                case "$key" in
+                    METRICS_STATUS)      status="$val" ;;
+                    POD_NAME)            pod_name="$val" ;;
+                    POD_CREATION)        pod_creation="$val" ;;
+                    POD_START_TIME)      pod_start="$val" ;;
+                    CONTAINER_STARTED_AT) container_started="$val" ;;
+                    FINISHED_AT)         finished_at="$val" ;;
+                    SCHEDULED_AT)        scheduled_at="$val" ;;
+                    QUEUE_WAIT)          queue_wait="$val" ;;
+                esac
+            done < "$tmp_file"
         fi
 
-        local metrics
-        metrics=$(get_pod_metrics "$pod_name")
-        IFS='|' read -r pod_created container_creation container_started finished_at scheduled_at <<< "$metrics"
-
-        local queue_wait
-        queue_wait=$(calc_queue_wait "$pod_created" "$arrival")
-
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_created},${container_creation},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
-        echo "  -> ditulis ke ${out_csv}"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "     -> status=${status} | pod=${pod_name}"
     done
 
-    unset T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B T_JOB_NAME T_POD_NAME T_ARRIVAL
+    # Bersihkan tmp files
+    rm -f /tmp/metrics_*.txt
+
+    unset T_ORDER T_ORI_ID T_SIZE T_FILL_A T_FILL_B T_JOB_NAME T_ARRIVAL BG_PIDS
 
     echo ""
     echo "Selesai EDF ${rho_label} -> ${out_csv}"
