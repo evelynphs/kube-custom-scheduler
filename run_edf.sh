@@ -114,17 +114,31 @@ get_pod_metrics() {
     local pod_name=$1
 
     local pod_json
-    pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null)
+    pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null || echo "")
 
-    if [[ -z "$pod_json" ]]; then
+    # Trim whitespace + validasi JSON sebelum di-pipe ke python
+    pod_json=$(echo "$pod_json" | tr -d '[:space:]' | head -c 1)
+    if [[ "$pod_json" != "{" ]]; then
         echo "N/A|N/A|N/A|N/A|N/A"
         return
     fi
 
+    # Re-fetch karena sudah di-trim tadi
+    pod_json=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o json 2>/dev/null || echo "")
+
     echo "$pod_json" | python3 - <<'PYEOF'
 import sys, json
 
-d = json.load(sys.stdin)
+raw = sys.stdin.read()
+if not raw.strip():
+    print("N/A|N/A|N/A|N/A|N/A")
+    sys.exit(0)
+
+try:
+    d = json.loads(raw)
+except json.JSONDecodeError:
+    print("N/A|N/A|N/A|N/A|N/A")
+    sys.exit(0)
 
 # metadata.creationTimestamp -> pod_creation_timestamp
 pod_creation = d["metadata"].get("creationTimestamp", "N/A")
