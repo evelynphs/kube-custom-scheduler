@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-JOBS_CSV="jobs.csv"
-YAML_TEMPLATE="job-template.yaml"
+JOBS_CSV="experiment_five.csv"
+YAML_TEMPLATE="job.yaml"
 NAMESPACE="default"
 JOB_TIMEOUT=2000
 POLL_INTERVAL=5
@@ -65,30 +65,20 @@ get_field() {
 # ---------------------------------------------------------------------------
 calc_queue_wait() {
     local pod_creation_iso=$1
-    local arrival_epoch=$2
+    local arrival_ts=$2
 
     [[ "$pod_creation_iso" == "N/A" ]] && echo "N/A" && return
+    [[ "$arrival_ts" == "N/A" ]] && echo "N/A" && return
 
-    local pod_epoch
+    local pod_epoch arrival_epoch wait_s sign=""
     pod_epoch=$(date -d "$pod_creation_iso" +%s 2>/dev/null || echo "")
-    [[ -z "$pod_epoch" ]] && echo "N/A" && return
+    arrival_epoch=$(date -d "$arrival_ts" +%s 2>/dev/null || echo "")
 
-    local arrival_int arrival_frac frac3
-    arrival_int=$(echo "$arrival_epoch" | cut -d'.' -f1)
-    arrival_frac=$(echo "$arrival_epoch" | cut -d'.' -f2)
-    frac3="${arrival_frac:0:3}"
+    [[ -z "$pod_epoch" || -z "$arrival_epoch" ]] && echo "N/A" && return
 
-    local pod_ms arrival_ms wait_ms
-    pod_ms=$((pod_epoch * 1000))
-    arrival_ms=$(( arrival_int * 1000 + 10#$frac3 ))
-    wait_ms=$(( pod_ms - arrival_ms ))
-
-    local sign=""
-    if [[ $wait_ms -lt 0 ]]; then
-        sign="-"
-        wait_ms=$(( -wait_ms ))
-    fi
-    printf "%s%d.%03d\n" "$sign" "$((wait_ms / 1000))" "$((wait_ms % 1000))"
+    wait_s=$(( pod_epoch - arrival_epoch ))
+    [[ $wait_s -lt 0 ]] && sign="-" && wait_s=$(( -wait_s ))
+    printf "%s%d\n" "$sign" "$wait_s"
 }
 
 # ---------------------------------------------------------------------------
@@ -202,7 +192,8 @@ run_scenario() {
         local arr_int fa_int
         arr_int=$(echo "$e_arrival"    | cut -d'.' -f1)
         fa_int=$(echo  "$first_arrival" | cut -d'.' -f1)
-        local offset=$(( arr_int - fa_int ))
+        local offset
+        offset=$(( $(date -d "$e_arrival" +%s) - $(date -d "$first_arrival" +%s) ))
 
         E_ORDER[$idx]=$e_order
         E_ORI_ID[$idx]=$e_ori_id
@@ -250,7 +241,7 @@ run_scenario() {
 
         # Catat arrival aktual
         local arrival_epoch
-        arrival_epoch=$(date +%s%N | awk '{printf "%.6f\n", $1/1000000000}')
+        arrival_epoch=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         # Lookup data job
         local job_info="${JOB_DATA[$ori_id]:-}"
