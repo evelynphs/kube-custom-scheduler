@@ -201,7 +201,7 @@ run_scenario() {
 
     ensure_csv "$out_csv"
 
-    mapfile -t JOB_LINES < <(tail -n +2 "$JOBS_CSV")
+    mapfile -t JOB_LINES < <(tail -n +2 "$JOBS_CSV" | shuf)
     local total=${#JOB_LINES[@]}
 
     # Generate inter-arrival times
