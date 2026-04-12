@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-JOBS_CSV="experiment_five.csv"
+JOBS_CSV="experiment.csv"
 YAML_TEMPLATE="job.yaml"
 NAMESPACE="default"
 JOB_TIMEOUT=2000
@@ -26,8 +26,8 @@ OUTPUT_DIR="."
 
 # M/M/c parameters
 C_SERVERS=10
-# MU=0.0015    # 1 / 678.18
-MU=0.00862 
+MU=0.0015    # 1 / 678.18
+# MU=0.00862 
 
 declare -A RHO_MAP
 RHO_MAP[low]=0.50
