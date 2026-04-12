@@ -34,7 +34,7 @@ RHO_MAP[low]=0.50
 RHO_MAP[medium]=0.75
 RHO_MAP[high]=0.95
 
-CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
+CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds,deadline_timestamp"
 
 ensure_csv() {
     echo "$CSV_HEADER" > "$1"
@@ -144,7 +144,7 @@ watch_job() {
         return
     fi
 
-    local pod_creation container_creation_timestamp container_started_at finished_at scheduled_at queue_wait
+    local pod_creation container_creation_timestamp container_started_at finished_at scheduled_at queue_wait deadline_timestamp
 
     pod_creation=$(get_field "$pod_name" '{.metadata.creationTimestamp}' 3)
     container_creation_timestamp=$(get_field "$pod_name" '{.status.startTime}' 3)
@@ -156,6 +156,10 @@ watch_job() {
         -o go-template='{{range .status.conditions}}{{if eq .type "PodScheduled"}}{{.lastTransitionTime}}{{end}}{{end}}' \
         2>/dev/null || echo "N/A")
     [[ -z "$scheduled_at" ]] && scheduled_at="N/A"
+    deadline_timestamp=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.metadata.annotations.scheduling/deadline-timestamp}' \
+        2>/dev/null || echo "N/A")
+    [[ -z "$deadline_timestamp" ]] && deadline_timestamp="N/A"
 
     queue_wait=$(calc_queue_wait "$pod_creation" "$arrival_epoch")
 
@@ -168,6 +172,7 @@ watch_job() {
         echo "FINISHED_AT=${finished_at}"
         echo "SCHEDULED_AT=${scheduled_at}"
         echo "QUEUE_WAIT=${queue_wait}"
+        echo "DEADLINE_TIMESTAMP=${deadline_timestamp}"
     } > "$tmp_file"
 
     echo "  [DONE] $job_name -> $tmp_file"
@@ -310,9 +315,9 @@ run_scenario() {
         local arrival="${T_ARRIVAL[$i]}"
         local tmp_file="/tmp/metrics_${i}.txt"
 
-        local status pod_name pod_creation container_creation_timestamp container_started finished_at scheduled_at queue_wait
+        local status pod_name pod_creation container_creation_timestamp container_started finished_at scheduled_at queue_wait deadline_timestamp
         status="MISSING"; pod_name="N/A"; pod_creation="N/A"; container_creation_timestamp="N/A"
-        container_started="N/A"; finished_at="N/A"; scheduled_at="N/A"; queue_wait="N/A"
+        container_started="N/A"; finished_at="N/A"; scheduled_at="N/A"; queue_wait="N/A"; deadline_timestamp="N/A"
 
         if [[ -f "$tmp_file" ]]; then
             while IFS='=' read -r key val; do
@@ -325,11 +330,12 @@ run_scenario() {
                     FINISHED_AT)          finished_at="$val" ;;
                     SCHEDULED_AT)         scheduled_at="$val" ;;
                     QUEUE_WAIT)           queue_wait="$val" ;;
+                    DEADLINE_TIMESTAMP)   deadline_timestamp="$val" ;;
                 esac
             done < "$tmp_file"
         fi
 
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${container_creation_timestamp},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${container_creation_timestamp},${container_started},${finished_at},${scheduled_at},${queue_wait},${deadline_timestamp}" >> "$out_csv"
         echo "  [WRITE] order=${order} ${job_name} | status=${status}"
     done
 
