@@ -26,8 +26,8 @@ OUTPUT_DIR="."
 
 # M/M/c parameters
 C_SERVERS=10
-MU=0.0015    # 1 / 678.18
-# MU=0.00862 
+#MU=0.0015    # 1 / 678.18
+MU=0.00862 
 
 declare -A RHO_MAP
 RHO_MAP[low]=0.50
@@ -214,7 +214,19 @@ run_scenario() {
     echo "--- TAHAP 1: Apply jobs (Poisson arrival) ---"
     for i in "${!JOB_LINES[@]}"; do
         local line="${JOB_LINES[$i]}"
+
+        line=$(echo "$line" | tr -d '\r')
+
         IFS=',' read -r ori_id job_name size fill_a fill_b cpu_usage max_runtime <<< "$line"
+
+        ori_id=$(echo "$ori_id" | xargs)
+        job_name=$(echo "$job_name" | xargs)
+        size=$(echo "$size" | xargs)
+        fill_a=$(echo "$fill_a" | xargs)
+        fill_b=$(echo "$fill_b" | xargs)
+        cpu_usage=$(echo "$cpu_usage" | xargs)
+        max_runtime=$(echo "$max_runtime" | xargs)
+
         local order=$((i + 1))
 
         # Tunggu inter-arrival sebelum apply (kecuali job pertama)
