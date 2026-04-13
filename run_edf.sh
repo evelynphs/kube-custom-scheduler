@@ -34,6 +34,8 @@ declare -A RHO_MAP
 RHO_MAP[low]=0.50
 RHO_MAP[medium]=0.75
 RHO_MAP[high]=0.95
+RHO_MAP[very_high]=0.99
+RHO_MAP[extreme]=2.0
 
 CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds,deadline_timestamp"
 
