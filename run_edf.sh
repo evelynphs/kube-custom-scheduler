@@ -358,10 +358,14 @@ case "$MODE" in
     low)     run_scenario low ;;
     medium)  run_scenario medium ;;
     high)    run_scenario high ;;
+    very_high) run_scenario very_high ;;
+    extreme) run_scenario extreme ;;
     all)
         run_scenario low
         run_scenario medium
         run_scenario high
+        run_scenario very_high
+        run_scenario extreme
         ;;
     *)
         echo "Usage: $0 [low|medium|high|all]"
