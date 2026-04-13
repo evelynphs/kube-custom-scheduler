@@ -333,6 +333,13 @@ run_scenario() {
 
         # Parse job_info
         IFS=',' read -r size fill_a fill_b cpu_usage max_runtime <<< "$job_info"
+        
+        # Trim whitespace
+        size=$(echo "$size" | xargs)
+        fill_a=$(echo "$fill_a" | xargs)
+        fill_b=$(echo "$fill_b" | xargs)
+        cpu_usage=$(echo "$cpu_usage" | xargs)
+        max_runtime=$(echo "$max_runtime" | xargs)
 
         local def_job_name="${E_JOB_NAME[$i]}-def"
 
