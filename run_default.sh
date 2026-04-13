@@ -19,7 +19,7 @@ POLL_INTERVAL=5
 EDF_CSV_DIR="."
 OUTPUT_DIR="."
 
-CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,pod_start_time,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
+CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds"
 
 # ---------------------------------------------------------------------------
 # Build lookup: ori_id -> size,fill_a,fill_b,cpu_usage,max_runtime
@@ -169,10 +169,10 @@ watch_job() {
         return
     fi
 
-    local pod_creation pod_start_time container_started_at finished_at scheduled_at queue_wait
+    local pod_creation container_creation_timestamp container_started_at finished_at scheduled_at queue_wait
 
     pod_creation=$(get_field "$pod_name" '{.metadata.creationTimestamp}' 3)
-    pod_start_time=$(get_field "$pod_name" '{.status.startTime}' 3)
+    container_creation_timestamp=$(get_field "$pod_name" '{.status.startTime}' 3)
     container_started_at=$(get_field "$pod_name" \
         '{.status.containerStatuses[0].state.terminated.startedAt}' 5)
     finished_at=$(get_field "$pod_name" \
@@ -190,7 +190,7 @@ watch_job() {
         echo "METRICS_STATUS=OK"
         echo "POD_NAME=${pod_name}"
         echo "POD_CREATION=${pod_creation}"
-        echo "POD_START_TIME=${pod_start_time}"
+        echo "CONTAINER_CREATION_TIMESTAMP=${container_creation_timestamp}"
         echo "CONTAINER_STARTED_AT=${container_started_at}"
         echo "FINISHED_AT=${finished_at}"
         echo "SCHEDULED_AT=${scheduled_at}"
@@ -427,7 +427,7 @@ run_scenario() {
         local status="MISSING"
         local pod_name="N/A"
         local pod_creation="N/A"
-        local pod_start="N/A"
+        local container_creation_timestamp="N/A"
         local container_started="N/A"
         local finished_at="N/A"
         local scheduled_at="N/A"
@@ -439,7 +439,7 @@ run_scenario() {
                     METRICS_STATUS)       status="$val" ;;
                     POD_NAME)             pod_name="$val" ;;
                     POD_CREATION)         pod_creation="$val" ;;
-                    POD_START_TIME)       pod_start="$val" ;;
+                    CONTAINER_CREATION_TIMESTAMP) container_creation_timestamp="$val" ;;
                     CONTAINER_STARTED_AT) container_started="$val" ;;
                     FINISHED_AT)          finished_at="$val" ;;
                     SCHEDULED_AT)         scheduled_at="$val" ;;
@@ -449,7 +449,7 @@ run_scenario() {
         fi
 
         # Write to CSV
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${def_job_name},${pod_name},${arrival},${pod_creation},${pod_start},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
+        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${def_job_name},${pod_name},${arrival},${pod_creation},${container_creation_timestamp},${container_started},${finished_at},${scheduled_at},${queue_wait}" >> "$out_csv"
         echo "  [WRITE] order=${order} ${def_job_name} | status=${status}"
     done
 
