@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-JOBS_CSV="experiment_five.csv"
+JOBS_CSV="experiment.csv"
 YAML_TEMPLATE="job.yaml"
 NAMESPACE="default"
 JOB_TIMEOUT=2000
