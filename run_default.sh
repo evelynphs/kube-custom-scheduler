@@ -359,7 +359,7 @@ run_scenario() {
             -e "s|<size>|${size}|g" \
             -e "s|<fill_a>|${fill_a}|g" \
             -e "s|<fill_b>|${fill_b}|g" \
-            -e "s|schedulerName: deadline-default-scheduler|g" \
+            -e "s|schedulerName: deadline-default-scheduler|schedulerName: deadline-default-scheduler|g" \
             "$YAML_TEMPLATE" > "$tmp_yaml"
 
         echo "[${E_ORDER[$i]}/${total}] APPLY ${def_job_name} | arrival=${arrival_epoch}"
