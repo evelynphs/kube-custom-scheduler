@@ -510,13 +510,15 @@ case "$MODE" in
     low)     run_scenario low ;;
     medium)  run_scenario medium ;;
     high)    run_scenario high ;;
+    very_high)    run_scenario very_high ;;
     all)
         run_scenario low
         run_scenario medium
         run_scenario high
+        run_scenario very_high
         ;;
     *)
-        echo "Usage: $0 [low|medium|high|all]"
+        echo "Usage: $0 [low|medium|high|very_high|all]"
         exit 1
         ;;
 esac
