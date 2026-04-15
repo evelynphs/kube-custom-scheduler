@@ -262,6 +262,7 @@ run_scenario() {
             -e "s|<size>|${size}|g" \
             -e "s|<fill_a>|${fill_a}|g" \
             -e "s|<fill_b>|${fill_b}|g" \
+            -e "s|<scheduler_name>|deadline-aware-scheduler|g" \
             "$YAML_TEMPLATE" > "$tmp_yaml"
 
         echo "[${order}/${total}] APPLY ${job_name} | arrival=${arrival_epoch}"
