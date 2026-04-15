@@ -20,6 +20,7 @@ nohup bash run_edf.sh all > run_edf_all_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 nohup bash run_default.sh low > run_default_low_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 nohup bash run_default.sh medium > run_default_medium_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 nohup bash run_default.sh high > run_default_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_default.sh very_high > run_default_very_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 nohup bash run_default.sh all > run_default_all_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 
 # Monitor log: tail -f run_edf_*.log
