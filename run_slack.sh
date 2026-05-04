@@ -30,7 +30,7 @@ OUTPUT_DIR="."
 
 CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds,deadline_timestamp"
 
-# FIX: Deklarasi global agar tidak unbound dan tidak hilang saat antar skenario
+# FIX: Deklarasi global agar tidak unbound
 declare -a E_ORDER=() E_ORI_ID=() E_ARRIVAL=() E_OFFSET=()
 declare -A JOB_DATA
 
@@ -120,7 +120,7 @@ get_field() {
 }
 
 # ---------------------------------------------------------------------------
-# Background watcher: tunggu pod Succeeded -> tulis tmp file
+# Background watcher
 # ---------------------------------------------------------------------------
 watch_job() {
     local idx=$1 job_name=$2 pod_name=$3 arrival_iso=$4
@@ -133,6 +133,7 @@ watch_job() {
             --output=jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "Unknown")
         if   [[ "$phase" == "Succeeded" ]]; then break
         elif [[ "$phase" == "Failed"    ]]; then
+            echo "  [WARN] $job_name Failed" >&2
             echo "METRICS_STATUS=FAILED" > "$tmp_file"; return
         fi
         sleep "$POLL_INTERVAL"
@@ -141,16 +142,16 @@ watch_job() {
 
     if [[ "$phase" != "Succeeded" ]]; then
         echo "METRICS_STATUS=TIMEOUT" > "$tmp_file"
-        echo "  [WARN] $job_name timeout setelah ${JOB_TIMEOUT}s" >&2
+        echo "  [WARN] $job_name timeout setelah ${JOB_TIMEOUT}s (phase=$phase)" >&2
         return
     fi
 
-    # Refresh pod name jika belum dapat
     if [[ "$pod_name" == "NOT_FOUND" || -z "$pod_name" ]]; then
         pod_name=$(kubectl get pods -n "$NAMESPACE" \
             --selector="job-name=${job_name}" \
             --output=jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "NOT_FOUND")
     fi
+
     if [[ "$pod_name" == "NOT_FOUND" || -z "$pod_name" ]]; then
         echo "METRICS_STATUS=NO_POD" > "$tmp_file"
         echo "  [WARN] $job_name: pod tidak ditemukan" >&2
@@ -194,13 +195,11 @@ watch_job() {
 }
 
 # ---------------------------------------------------------------------------
-# Load input CSV -> isi array global E_ORDER, E_ORI_ID, E_ARRIVAL, E_OFFSET
+# Load input CSV
 # ---------------------------------------------------------------------------
 load_input_csv() {
     local input_csv=$1
-
     E_ORDER=(); E_ORI_ID=(); E_ARRIVAL=(); E_OFFSET=()
-
     local idx=0 first_arrival=""
 
     while IFS=',' read -r \
@@ -234,7 +233,7 @@ load_input_csv() {
 }
 
 # ---------------------------------------------------------------------------
-# Core runner: apply semua job sesuai timing, spawn watcher, tulis CSV
+# Core runner
 # ---------------------------------------------------------------------------
 run_scenario_inner() {
     local scheduler_name=$1
@@ -249,33 +248,22 @@ run_scenario_inner() {
 
     rm -f /tmp/metrics_slack_*.txt
 
-    local start_epoch
-    start_epoch=$(date +%s)
+    local start_epoch=$(date +%s)
     echo "  start_epoch: ${start_epoch}"
     echo ""
 
-    # ==================================================================
-    # TAHAP 1: Apply + spawn watcher
-    # ==================================================================
     echo "--- TAHAP 1: Apply jobs ---"
-
     for i in $(seq 0 $(( total - 1 ))); do
         local offset="${E_OFFSET[$i]}"
-
-        # Timing replay: tunggu sampai offset dari start
-        local now elapsed sleep_needed
-        now=$(date +%s)
-        elapsed=$(( now - start_epoch ))
-        sleep_needed=$(( offset - elapsed ))
+        local now=$(date +%s)
+        local elapsed=$(( now - start_epoch ))
+        local sleep_needed=$(( offset - elapsed ))
         if [[ $sleep_needed -gt 0 ]]; then
             echo "[${E_ORDER[$i]}/${total}] Menunggu ${sleep_needed}s (offset=${offset}s)..."
             sleep "$sleep_needed"
         fi
 
-        # Catat arrival aktual
-        local arrival_iso
-        arrival_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
+        local arrival_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         local ori_id="${E_ORI_ID[$i]}"
         local job_info="${JOB_DATA[$ori_id]:-}"
 
@@ -293,28 +281,14 @@ run_scenario_inner() {
         fi
 
         IFS=',' read -r size fill_a fill_b cpu_usage max_runtime <<< "$job_info"
-        size=$(echo "$size"               | xargs)
-        fill_a=$(echo "$fill_a"           | xargs)
-        fill_b=$(echo "$fill_b"           | xargs)
-        cpu_usage=$(echo "$cpu_usage"     | xargs)
-        max_runtime=$(echo "$max_runtime" | xargs)
+        size=$(echo "$size" | xargs); fill_a=$(echo "$fill_a" | xargs); fill_b=$(echo "$fill_b" | xargs)
+        cpu_usage=$(echo "$cpu_usage" | xargs); max_runtime=$(echo "$max_runtime" | xargs)
 
-        # Deadline = arrival_aktual + max_runtime (sudah include slack)
-        local arrival_epoch deadline_iso
-        arrival_epoch=$(to_epoch "$arrival_iso")
-        if [[ -n "$arrival_epoch" ]]; then
-            deadline_iso=$(from_epoch $(( arrival_epoch + max_runtime )))
-        else
-            deadline_iso="N/A"
-        fi
+        local arrival_epoch=$(to_epoch "$arrival_iso")
+        local deadline_iso=$( [[ -n "$arrival_epoch" ]] && from_epoch $(( arrival_epoch + max_runtime )) || echo "N/A" )
+        local new_job_name="job-$(echo "${ori_id}" | tr '[:upper:]' '[:lower:]')${job_suffix}"
 
-        # Nama job: ori_id + suffix, pastikan lowercase & valid untuk k8s
-        local new_job_name
-        new_job_name="job-$(echo "${ori_id}" | tr '[:upper:]' '[:lower:]')${job_suffix}"
-
-        local tmp_yaml
-        tmp_yaml=$(mktemp /tmp/job_slack_XXXXXX.yaml)
-
+        local tmp_yaml=$(mktemp /tmp/job_slack_XXXXXX.yaml)
         sed \
             -e "s|<job_name>|${new_job_name}|g" \
             -e "s|<max_runtime>|${max_runtime}|g" \
@@ -335,7 +309,6 @@ run_scenario_inner() {
         fi
         rm -f "$tmp_yaml"
 
-        # Tunggu pod muncul (max 60 detik)
         local pod_name="" wp=0
         while [[ -z "$pod_name" && $wp -lt 60 ]]; do
             pod_name=$(kubectl get pods -n "$NAMESPACE" \
@@ -350,23 +323,14 @@ run_scenario_inner() {
             echo "  -> pod: ${pod_name}"
         fi
 
-        T_ORDER[$i]="${E_ORDER[$i]}"
-        T_ORI_ID[$i]=$ori_id
-        T_SIZE[$i]=$size
-        T_FILL_A[$i]=$fill_a
-        T_FILL_B[$i]=$fill_b
-        T_JOB_NAME[$i]=$new_job_name
-        T_POD_NAME[$i]=$pod_name
-        T_ARRIVAL[$i]=$arrival_iso
+        T_ORDER[$i]="${E_ORDER[$i]}"; T_ORI_ID[$i]=$ori_id; T_SIZE[$i]=$size; T_FILL_A[$i]=$fill_a; T_FILL_B[$i]=$fill_b
+        T_JOB_NAME[$i]=$new_job_name; T_POD_NAME[$i]=$pod_name; T_ARRIVAL[$i]=$arrival_iso
 
         watch_job "$i" "$new_job_name" "$pod_name" "$arrival_iso" &
         BG_PIDS[$i]=$!
         echo "  -> watcher PID: ${BG_PIDS[$i]}"
     done
 
-    # ==================================================================
-    # TAHAP 2: Tunggu semua watcher
-    # ==================================================================
     echo ""
     echo "--- TAHAP 2: Menunggu semua watcher selesai ---"
     for i in "${!BG_PIDS[@]}"; do
@@ -376,137 +340,72 @@ run_scenario_inner() {
         fi
     done
 
-    # ==================================================================
-    # TAHAP 3: Tulis CSV sesuai urutan apply
-    # ==================================================================
     echo ""
     echo "--- TAHAP 3: Tulis CSV ---"
     for i in $(seq 0 $(( total - 1 ))); do
-        local order="${T_ORDER[$i]:-}"
-        local ori_id="${T_ORI_ID[$i]:-}"
-        local size="${T_SIZE[$i]:-N/A}"
-        local fill_a="${T_FILL_A[$i]:-N/A}"
-        local fill_b="${T_FILL_B[$i]:-N/A}"
-        local job_name="${T_JOB_NAME[$i]:-UNKNOWN}"
-        local arrival="${T_ARRIVAL[$i]:-N/A}"
         local tmp_file="/tmp/metrics_slack_${i}.txt"
-
-        local status="MISSING"
-        local pod_name="${T_POD_NAME[$i]:-N/A}" pod_creation="N/A"
-        local container_creation_ts="N/A" container_started="N/A"
-        local finished="N/A" scheduled="N/A"
-        local queue_wait="N/A" deadline="N/A"
+        local status="MISSING"; local pod_creation="N/A"; local c_create="N/A"; local c_start="N/A"; local finished="N/A"; local scheduled="N/A"; local q_wait="N/A"; local dline="N/A"
+        local pod_name_metrics="${T_POD_NAME[$i]}"
 
         if [[ -f "$tmp_file" ]]; then
             while IFS='=' read -r key val; do
                 case "$key" in
-                    METRICS_STATUS)         status="$val" ;;
-                    POD_NAME)               pod_name="$val" ;;
-                    POD_CREATION)           pod_creation="$val" ;;
-                    CONTAINER_CREATION_TS)  container_creation_ts="$val" ;;
-                    CONTAINER_STARTED)      container_started="$val" ;;
-                    FINISHED)               finished="$val" ;;
-                    SCHEDULED)              scheduled="$val" ;;
-                    QUEUE_WAIT)             queue_wait="$val" ;;
-                    DEADLINE)               deadline="$val" ;;
+                    METRICS_STATUS) status="$val" ;;
+                    POD_NAME) pod_name_metrics="$val" ;;
+                    POD_CREATION) pod_creation="$val" ;;
+                    CONTAINER_CREATION_TS) c_create="$val" ;;
+                    CONTAINER_STARTED) c_start="$val" ;;
+                    FINISHED) finished="$val" ;;
+                    SCHEDULED) scheduled="$val" ;;
+                    QUEUE_WAIT) q_wait="$val" ;;
+                    DEADLINE) dline="$val" ;;
                 esac
             done < "$tmp_file"
         fi
 
-        echo "${order},${rho_label},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${container_creation_ts},${container_started},${finished},${scheduled},${queue_wait},${deadline}" >> "$out_csv"
-        echo "  [WRITE] order=${order} ${job_name} status=${status}"
+        echo "${T_ORDER[$i]},${rho_label},${T_ORI_ID[$i]},${T_SIZE[$i]:-N/A},${T_FILL_A[$i]:-N/A},${T_FILL_B[$i]:-N/A},${T_JOB_NAME[$i]},${pod_name_metrics},${T_ARRIVAL[$i]},${pod_creation},${c_create},${c_start},${finished},${scheduled},${q_wait},${dline}" >> "$out_csv"
+        echo "  [WRITE] order=${T_ORDER[$i]} ${T_JOB_NAME[$i]} status=${status}"
     done
-
     rm -f /tmp/metrics_slack_*.txt
 }
 
-# ---------------------------------------------------------------------------
-# Wrappers per skenario
-# ---------------------------------------------------------------------------
 run_edf_scenario() {
-    local rho=$1
-    local input_csv="${CSV_DIR}/edf_${rho}_slack.csv"
-    local out_csv="${OUTPUT_DIR}/edf_${rho}_slack_result.csv"
-
-    [[ ! -f "$input_csv" ]] && \
-        echo "[ERROR] Input CSV tidak ada: $input_csv" >&2 && return 1
-
-    echo "=============================================="
-    echo " EDF SLACK  rho=${rho}"
-    echo " Input : ${input_csv}"
-    echo " Output: ${out_csv}"
-    echo "=============================================="
-
+    local rho=$1; local input_csv="${CSV_DIR}/edf_${rho}_slack.csv"; local out_csv="${OUTPUT_DIR}/edf_${rho}_slack_result.csv"
+    [[ ! -f "$input_csv" ]] && echo "[ERROR] Input EDF CSV tidak ada: $input_csv" >&2 && return 1
+    echo "=============================================="; echo " EDF SLACK  rho=${rho}"; echo " Input : ${input_csv}"; echo " Output: ${out_csv}"; echo "=============================================="
     ensure_csv "$out_csv"
-
-    local n
-    n=$(load_input_csv "$input_csv")
+    local n=$(load_input_csv "$input_csv")
     echo "  Loaded ${n} entries"
-
     run_scenario_inner "edf-scheduler" "-edf-slack" "$out_csv" "$rho"
-
     echo "Selesai EDF slack ${rho} -> ${out_csv}"
     echo ""
 }
 
 run_default_scenario() {
-    local rho=$1
-    local input_csv="${CSV_DIR}/edf_${rho}_slack.csv"
-    local out_csv="${OUTPUT_DIR}/default_${rho}_slack_result.csv"
-
-    [[ ! -f "$input_csv" ]] && \
-        echo "[ERROR] Input CSV tidak ada: $input_csv" >&2 && return 1
-
-    echo "=============================================="
-    echo " DEFAULT SLACK  rho=${rho}"
-    echo " Input : ${input_csv}"
-    echo " Output: ${out_csv}"
-    echo "=============================================="
-
+    local rho=$1; local input_csv="${CSV_DIR}/default_${rho}_slack.csv"; local out_csv="${OUTPUT_DIR}/default_${rho}_slack_result.csv"
+    [[ ! -f "$input_csv" ]] && echo "[ERROR] Input Default CSV tidak ada: $input_csv" >&2 && return 1
+    echo "=============================================="; echo " DEFAULT SLACK  rho=${rho}"; echo " Input : ${input_csv}"; echo " Output: ${out_csv}"; echo "=============================================="
     ensure_csv "$out_csv"
-
-    local n
-    n=$(load_input_csv "$input_csv")
+    local n=$(load_input_csv "$input_csv")
     echo "  Loaded ${n} entries"
-
     run_scenario_inner "deadline-default-scheduler" "-def-slack" "$out_csv" "$rho"
-
     echo "Selesai Default slack ${rho} -> ${out_csv}"
     echo ""
 }
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry Point
 # ---------------------------------------------------------------------------
-MODE="${1:-both}"
-RHO="${2:-all}"
-
+MODE="${1:-both}"; RHO="${2:-all}"
 RHO_LIST=()
-case "$RHO" in
-    low|medium|high|very_high) RHO_LIST=("$RHO") ;;
-    all) RHO_LIST=(low medium high very_high) ;;
-    *)
-        echo "Usage: $0 [edf|default|both] [low|medium|high|very_high|all]"
-        exit 1 ;;
-esac
-
-[[ ! -f "$YAML_TEMPLATE" ]] && echo "[ERROR] YAML template tidak ada: $YAML_TEMPLATE" >&2 && exit 1
-[[ ! -f "$JOBS_CSV"      ]] && echo "[ERROR] Jobs CSV tidak ada: $JOBS_CSV"               >&2 && exit 1
+case "$RHO" in low|medium|high|very_high) RHO_LIST=("$RHO") ;; all) RHO_LIST=(low medium high very_high) ;; *) exit 1 ;; esac
 
 load_job_data
-
 for rho in "${RHO_LIST[@]}"; do
     case "$MODE" in
-        edf)     run_edf_scenario     "$rho" ;;
+        edf) run_edf_scenario "$rho" ;;
         default) run_default_scenario "$rho" ;;
-        both)
-            run_edf_scenario     "$rho"
-            run_default_scenario "$rho"
-            ;;
-        *)
-            echo "Usage: $0 [edf|default|both] [low|medium|high|very_high|all]"
-            exit 1 ;;
+        both) run_edf_scenario "$rho"; run_default_scenario "$rho" ;;
     esac
 done
-
 echo "=== run_slack.sh selesai ==="
