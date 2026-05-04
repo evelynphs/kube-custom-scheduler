@@ -30,7 +30,7 @@ OUTPUT_DIR="."
 
 CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds,deadline_timestamp"
 
-# FIX: Deklarasi global supaya tidak unbound saat dipanggil run_scenario_inner
+# FIX: Deklarasi global agar tidak unbound dan tidak hilang saat antar skenario
 declare -a E_ORDER=() E_ORI_ID=() E_ARRIVAL=() E_OFFSET=()
 declare -A JOB_DATA
 
@@ -403,7 +403,7 @@ run_scenario_inner() {
                     METRICS_STATUS)         status="$val" ;;
                     POD_NAME)               pod_name="$val" ;;
                     POD_CREATION)           pod_creation="$val" ;;
-                    CONTAINER_CREATION_TS) container_creation_ts="$val" ;;
+                    CONTAINER_CREATION_TS)  container_creation_ts="$val" ;;
                     CONTAINER_STARTED)      container_started="$val" ;;
                     FINISHED)               finished="$val" ;;
                     SCHEDULED)              scheduled="$val" ;;
