@@ -343,7 +343,7 @@ run_scenario_inner() {
         # Pilih scheduler
         local scheduler_name
         if [[ "$mode" == "edf" ]]; then
-            scheduler_name="edf-scheduler"
+            scheduler_name="deadline-aware-scheduler"
         else
             scheduler_name="deadline-default-scheduler"
         fi
