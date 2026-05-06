@@ -33,6 +33,19 @@ POLL_INTERVAL=5
 CSV_DIR="."
 OUTPUT_DIR="."
 
+# Stuffer config
+STUFFER_EDF_DIR="temp-stuffer"
+STUFFER_EDF_PREFIX="temp-stuffer"
+STUFFER_EDF_COUNT=3
+
+STUFFER_DEFAULT_DIR="temp-stuffer-default"
+STUFFER_DEFAULT_PREFIX="temp-stuffer-default"
+STUFFER_DEFAULT_COUNT=3
+
+# Retry config
+RETRY_MAX=3
+RETRY_WAIT=10
+
 CSV_HEADER="order,rho,ori_id,size,fill_a,fill_b,job_name,pod_name,arrival_timestamp,pod_creation_timestamp,container_creation_timestamp,container_started_at,finished_at,scheduled_at,queue_wait_seconds,deadline_timestamp"
 
 # ---------------------------------------------------------------------------
@@ -130,6 +143,256 @@ get_field() {
 }
 
 # ---------------------------------------------------------------------------
+# FITUR 1: Apply stuffer jobs sebelum job utama
+#   $1 = mode: "edf" | "default"
+# ---------------------------------------------------------------------------
+apply_stuffers() {
+    local mode=$1
+
+    if [[ "$mode" == "edf" ]]; then
+        local stuffer_dir="$STUFFER_EDF_DIR"
+        local stuffer_prefix="$STUFFER_EDF_PREFIX"
+        local stuffer_count="$STUFFER_EDF_COUNT"
+    else
+        local stuffer_dir="$STUFFER_DEFAULT_DIR"
+        local stuffer_prefix="$STUFFER_DEFAULT_PREFIX"
+        local stuffer_count="$STUFFER_DEFAULT_COUNT"
+    fi
+
+    echo "--- STUFFER: Apply stuffer jobs untuk mode=${mode} ---"
+
+    if [[ ! -d "$stuffer_dir" ]]; then
+        echo "  [WARN] Stuffer dir tidak ditemukan: $stuffer_dir, skip stuffer." >&2
+        return 0
+    fi
+
+    local applied=0
+    for n in $(seq 1 "$stuffer_count"); do
+        local yaml_path="${stuffer_dir}/${stuffer_prefix}-${n}.yaml"
+        if [[ ! -f "$yaml_path" ]]; then
+            echo "  [WARN] Stuffer YAML tidak ada: $yaml_path, skip." >&2
+            continue
+        fi
+        echo "  [STUFFER] Applying: $yaml_path"
+        if kubectl apply -f "$yaml_path" -n "$NAMESPACE"; then
+            echo "  [STUFFER] OK: $yaml_path"
+            applied=$(( applied + 1 ))
+        else
+            echo "  [ERROR] Gagal apply stuffer: $yaml_path" >&2
+        fi
+    done
+
+    echo "  [STUFFER] Total applied: ${applied}/${stuffer_count}"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# FITUR 3: Cleanup semua jobs (stuffer + main) di namespace
+# ---------------------------------------------------------------------------
+cleanup_all_jobs() {
+    echo "--- CLEANUP: Menghapus semua jobs di namespace=${NAMESPACE} ---"
+
+    local jobs
+    jobs=$(kubectl get jobs -n "$NAMESPACE" \
+        --output=jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+    if [[ -z "$jobs" ]]; then
+        echo "  [CLEANUP] Tidak ada jobs yang perlu dihapus."
+        return 0
+    fi
+
+    echo "  [CLEANUP] Jobs yang akan dihapus: $jobs"
+
+    # Delete semua jobs sekaligus (cascade ke pods)
+    if kubectl delete jobs -n "$NAMESPACE" --all --wait=false 2>/dev/null; then
+        echo "  [CLEANUP] Semua jobs berhasil dihapus."
+    else
+        echo "  [WARN] Ada masalah saat delete jobs, coba satu per satu..." >&2
+        for job in $jobs; do
+            kubectl delete job "$job" -n "$NAMESPACE" --wait=false 2>/dev/null || \
+                echo "  [WARN] Gagal hapus job: $job" >&2
+        done
+    fi
+
+    # Tunggu sebentar biar pods juga terminate
+    echo "  [CLEANUP] Menunggu pods terminate..."
+    sleep 5
+    echo "  [CLEANUP] Selesai."
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# FITUR 2: Fetch metrics dari pod yang sudah ada (untuk retry)
+#   $1 = pod_name
+#   $2 = arrival_iso
+#   Output: print ke stdout "pod_creation,container_creation,started,finished,scheduled,queue_wait,deadline"
+# ---------------------------------------------------------------------------
+fetch_pod_metrics() {
+    local pod_name=$1
+    local arrival_iso=$2
+
+    local pod_creation container_creation started finished scheduled deadline queue_wait
+
+    pod_creation=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || echo "")
+    container_creation=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.status.startTime}' 2>/dev/null || echo "")
+    started=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.status.containerStatuses[0].state.terminated.startedAt}' 2>/dev/null || echo "")
+    finished=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.status.containerStatuses[0].state.terminated.finishedAt}' 2>/dev/null || echo "")
+    scheduled=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o go-template='{{range .status.conditions}}{{if eq .type "PodScheduled"}}{{.lastTransitionTime}}{{end}}{{end}}' \
+        2>/dev/null || echo "")
+    deadline=$(kubectl get pod "$pod_name" -n "$NAMESPACE" \
+        -o jsonpath='{.metadata.annotations.scheduling/deadline-timestamp}' 2>/dev/null || echo "")
+
+    # Default ke N/A jika kosong
+    [[ -z "$pod_creation"     ]] && pod_creation="N/A"
+    [[ -z "$container_creation" ]] && container_creation="N/A"
+    [[ -z "$started"          ]] && started="N/A"
+    [[ -z "$finished"         ]] && finished="N/A"
+    [[ -z "$scheduled"        ]] && scheduled="N/A"
+    [[ -z "$deadline"         ]] && deadline="N/A"
+
+    queue_wait=$(calc_queue_wait "$pod_creation" "$arrival_iso")
+
+    echo "${pod_creation},${container_creation},${started},${finished},${scheduled},${queue_wait},${deadline}"
+}
+
+# ---------------------------------------------------------------------------
+# FITUR 2: Cek apakah baris CSV ada field yang missing (N/A atau kosong)
+#   Cek kolom: pod_creation(10), container_creation(11), container_started(12),
+#              finished(13), scheduled(14)
+#   Return 0 jika complete, 1 jika ada missing
+# ---------------------------------------------------------------------------
+row_has_missing() {
+    local row=$1
+    # Field index (1-based): 10=pod_creation, 11=container_creation,
+    #                        12=container_started, 13=finished, 14=scheduled
+    local f10 f11 f12 f13 f14
+    f10=$(echo "$row" | cut -d',' -f10)
+    f11=$(echo "$row" | cut -d',' -f11)
+    f12=$(echo "$row" | cut -d',' -f12)
+    f13=$(echo "$row" | cut -d',' -f13)
+    f14=$(echo "$row" | cut -d',' -f14)
+
+    for f in "$f10" "$f11" "$f12" "$f13" "$f14"; do
+        if [[ -z "$f" || "$f" == "N/A" ]]; then
+            return 0  # ada yang missing
+        fi
+    done
+    return 1  # semua lengkap
+}
+
+# ---------------------------------------------------------------------------
+# FITUR 2: Retry mechanism untuk mengisi data yang missing di CSV
+#   $1 = csv_file path
+# ---------------------------------------------------------------------------
+retry_missing_rows() {
+    local csv_file=$1
+
+    echo "--- RETRY: Cek dan isi data missing di ${csv_file} ---"
+
+    if [[ ! -f "$csv_file" ]]; then
+        echo "  [ERROR] CSV tidak ditemukan: $csv_file" >&2
+        return 1
+    fi
+
+    local attempt=0
+    local has_missing=1
+
+    while [[ $attempt -lt $RETRY_MAX && $has_missing -eq 1 ]]; do
+        attempt=$(( attempt + 1 ))
+        has_missing=0
+
+        echo "  [RETRY] Attempt ${attempt}/${RETRY_MAX}..."
+
+        # Baca semua baris (skip header)
+        local tmp_csv="${csv_file}.tmp_retry"
+        echo "$CSV_HEADER" > "$tmp_csv"
+
+        local line_num=0
+        while IFS= read -r row; do
+            line_num=$(( line_num + 1 ))
+            [[ $line_num -eq 1 ]] && continue  # skip header
+
+            if row_has_missing "$row"; then
+                has_missing=1
+
+                # Ambil field yang sudah ada
+                local order rho ori_id size fill_a fill_b job_name pod_name arrival
+                order=$(echo "$row"    | cut -d',' -f1)
+                rho=$(echo "$row"      | cut -d',' -f2)
+                ori_id=$(echo "$row"   | cut -d',' -f3)
+                size=$(echo "$row"     | cut -d',' -f4)
+                fill_a=$(echo "$row"   | cut -d',' -f5)
+                fill_b=$(echo "$row"   | cut -d',' -f6)
+                job_name=$(echo "$row" | cut -d',' -f7)
+                pod_name=$(echo "$row" | cut -d',' -f8)
+                arrival=$(echo "$row"  | cut -d',' -f9)
+
+                echo "  [RETRY] Missing data -> order=${order} job=${job_name} pod=${pod_name}"
+
+                # Coba cari pod jika pod_name N/A atau kosong
+                if [[ -z "$pod_name" || "$pod_name" == "N/A" || "$pod_name" == "NOT_FOUND" ]]; then
+                    if [[ -n "$job_name" && "$job_name" != "UNKNOWN" ]]; then
+                        pod_name=$(kubectl get pods -n "$NAMESPACE" \
+                            --selector="job-name=${job_name}" \
+                            --output=jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+                        [[ -z "$pod_name" ]] && pod_name="N/A"
+                        echo "    -> pod lookup: ${pod_name}"
+                    fi
+                fi
+
+                if [[ -z "$pod_name" || "$pod_name" == "N/A" || "$pod_name" == "NOT_FOUND" ]]; then
+                    echo "    -> [WARN] Pod masih tidak ditemukan, skip row ini." >&2
+                    echo "$row" >> "$tmp_csv"
+                    continue
+                fi
+
+                # Fetch metrics dari pod
+                local metrics
+                metrics=$(fetch_pod_metrics "$pod_name" "$arrival")
+
+                local pod_creation container_creation started finished scheduled queue_wait deadline
+                pod_creation=$(echo "$metrics"      | cut -d',' -f1)
+                container_creation=$(echo "$metrics" | cut -d',' -f2)
+                started=$(echo "$metrics"           | cut -d',' -f3)
+                finished=$(echo "$metrics"          | cut -d',' -f4)
+                scheduled=$(echo "$metrics"         | cut -d',' -f5)
+                queue_wait=$(echo "$metrics"        | cut -d',' -f6)
+                deadline=$(echo "$metrics"          | cut -d',' -f7)
+
+                local new_row="${order},${rho},${ori_id},${size},${fill_a},${fill_b},${job_name},${pod_name},${arrival},${pod_creation},${container_creation},${started},${finished},${scheduled},${queue_wait},${deadline}"
+                echo "$new_row" >> "$tmp_csv"
+                echo "    -> Updated: pod_creation=${pod_creation} finished=${finished}"
+            else
+                echo "$row" >> "$tmp_csv"
+            fi
+
+        done < "$csv_file"
+
+        # Replace csv asli
+        mv "$tmp_csv" "$csv_file"
+
+        if [[ $has_missing -eq 1 && $attempt -lt $RETRY_MAX ]]; then
+            echo "  [RETRY] Masih ada missing data, tunggu ${RETRY_WAIT}s sebelum retry..."
+            sleep "$RETRY_WAIT"
+        fi
+    done
+
+    if [[ $has_missing -eq 1 ]]; then
+        echo "  [RETRY] Setelah ${RETRY_MAX} attempt, masih ada baris dengan missing data." >&2
+        echo "  [RETRY] Periksa manual: $csv_file" >&2
+    else
+        echo "  [RETRY] Semua data lengkap di: $csv_file"
+    fi
+
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
 # Background watcher: tunggu pod Succeeded -> tulis tmp file
 # ---------------------------------------------------------------------------
 watch_job() {
@@ -169,7 +432,7 @@ watch_job() {
         return
     fi
 
-    local pod_creation container_creation_ts container_started finished scheduled queue_wait deadline_annotation
+    local pod_creation container_creation_ts container_started finished scheduled deadline_annotation
 
     pod_creation=$(get_field "$pod_name" '{.metadata.creationTimestamp}' 3)
     container_creation_ts=$(get_field "$pod_name" '{.status.startTime}' 3)
@@ -188,6 +451,7 @@ watch_job() {
         2>/dev/null || echo "N/A")
     [[ -z "$deadline_annotation" ]] && deadline_annotation="N/A"
 
+    local queue_wait
     queue_wait=$(calc_queue_wait "$pod_creation" "$arrival_iso")
 
     {
@@ -285,9 +549,14 @@ run_scenario_inner() {
     echo ""
 
     # ==========================================================================
-    # TAHAP 1: Apply + spawn watcher
+    # TAHAP 1: Apply stuffer jobs terlebih dahulu
     # ==========================================================================
-    echo "--- TAHAP 1: Apply jobs ---"
+    apply_stuffers "$mode"
+
+    # ==========================================================================
+    # TAHAP 2: Apply job utama + spawn watcher
+    # ==========================================================================
+    echo "--- TAHAP 2: Apply main jobs ---"
 
     for i in $(seq 0 $(( total - 1 ))); do
         local offset="${E_OFFSET[$i]}"
@@ -423,10 +692,10 @@ run_scenario_inner() {
     done
 
     # ==========================================================================
-    # TAHAP 2: Tunggu semua watcher
+    # TAHAP 3: Tunggu semua watcher
     # ==========================================================================
     echo ""
-    echo "--- TAHAP 2: Menunggu semua watcher selesai ---"
+    echo "--- TAHAP 3: Menunggu semua watcher selesai ---"
 
     for i in "${!BG_PIDS[@]}"; do
         if [[ -n "${BG_PIDS[$i]:-}" ]]; then
@@ -436,10 +705,10 @@ run_scenario_inner() {
     done
 
     # ==========================================================================
-    # TAHAP 3: Tulis CSV sesuai urutan apply
+    # TAHAP 4: Tulis CSV sesuai urutan apply
     # ==========================================================================
     echo ""
-    echo "--- TAHAP 3: Tulis CSV ---"
+    echo "--- TAHAP 4: Tulis CSV ---"
 
     for i in $(seq 0 $(( total - 1 ))); do
         local order="${T_ORDER[$i]:-}"
@@ -482,6 +751,12 @@ run_scenario_inner() {
     done
 
     rm -f /tmp/metrics_slack_*.txt
+
+    # ==========================================================================
+    # TAHAP 5: Retry missing data
+    # ==========================================================================
+    echo ""
+    retry_missing_rows "$out_csv"
 }
 
 # ---------------------------------------------------------------------------
@@ -571,11 +846,20 @@ load_job_data
 
 for rho in "${RHO_LIST[@]}"; do
     case "$MODE" in
-        edf)     run_edf_scenario     "$rho" ;;
-        default) run_default_scenario "$rho" ;;
-        both)
-            run_edf_scenario     "$rho"
+        edf)
+            run_edf_scenario "$rho"
+            # Cleanup setelah skenario selesai dan CSV lengkap
+            cleanup_all_jobs
+            ;;
+        default)
             run_default_scenario "$rho"
+            cleanup_all_jobs
+            ;;
+        both)
+            run_edf_scenario "$rho"
+            cleanup_all_jobs
+            run_default_scenario "$rho"
+            cleanup_all_jobs
             ;;
         *)
             echo "Usage: $0 [edf|default|both] [low|medium|high|very_high|all]"
