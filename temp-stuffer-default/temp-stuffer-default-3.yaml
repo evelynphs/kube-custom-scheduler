@@ -8,7 +8,7 @@ spec:
       annotations:
         scheduling/deadline-duration: "60s" #placeholder
     spec:    
-      nodeName: default-test-cluster-worker3
+      nodeName: deadline-default-cluster-worker3
       schedulerName: deadline-default-scheduler
       restartPolicy: Never
       containers:
