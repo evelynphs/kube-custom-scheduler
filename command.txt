@@ -1,0 +1,28 @@
+bash run_edf.sh low
+bash run_edf.sh medium
+bash run_edf.sh high
+bash run_edf.sh very_high
+bash run_edf.sh extreme
+bash run_edf.sh all
+
+bash run_default.sh low
+bash run_default.sh medium
+bash run_default.sh high
+bash run_default.sh all
+
+nohup bash run_edf.sh low > run_edf_low_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_edf.sh medium > run_edf_medium_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_edf.sh high > run_edf_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_edf.sh very_high > run_edf_very_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_edf.sh extreme > run_edf_very_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_edf.sh all > run_edf_all_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+nohup bash run_default.sh low > run_default_low_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_default.sh medium > run_default_medium_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_default.sh high > run_default_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_default.sh very_high > run_default_very_high_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup bash run_default.sh all > run_default_all_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# Monitor log: tail -f run_edf_*.log
+# Check status: ps aux | grep run_edf.sh
+# Kill: kill <PID>
