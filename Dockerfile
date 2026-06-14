@@ -21,7 +21,7 @@ FROM alpine:3.18
 RUN apk add --no-cache python3 py3-numpy
 
 COPY --from=builder /bin/kube-custom-scheduler /bin/kube-custom-scheduler
-COPY arithmetic_operation.py /app/arithmetic_operation.py
+COPY experiments/workloads/matrix_mult.py /app/matrix_mult.py
 WORKDIR /app
 
 CMD ["/bin/kube-custom-scheduler"]
