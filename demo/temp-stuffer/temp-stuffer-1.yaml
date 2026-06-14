@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temp-stuffer-1
+spec:
+  template:
+    metadata:
+    spec:
+      nodeName: runtime-test-cluster-worker
+      schedulerName: default-scheduler
+      restartPolicy: Never
+      containers:
+      - name: compute-task
+        image: busybox
+        resources:
+          requests:
+            cpu: "2000m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "1Gi" 
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting task 1 si pengganggu"
+          echo "Processing..."
+          sleep 700000
+          echo "Task completed!"
+---
